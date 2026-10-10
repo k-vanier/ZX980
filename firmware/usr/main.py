@@ -20,12 +20,15 @@ from usr.gt06_protocol import GT06Protocol
 from usr.http_protocol import HTTPProtocol
 
 
-GNSS_PORT = UART.UART2
-GNSS_PIN = Pin.GPIO10
+# Pin mapping is identical on EC800N and EC800M (QuecPython machine.Pin / machine.UART docs):
+#   UART2 = TX pin18 / RX pin17, GPIO10 = pin54, GPIO15 = pin80, GPIO16 = pin81, GPIO17 = pin76
+# Only the QuecPython firmware differs: flash an EC800M build, not the EC800N_CNLA one.
+GNSS_PORT = UART.UART2  # pin17 (RX) / pin18 (TX)
+GNSS_PIN = Pin.GPIO10   # pin54
 
-LED_RED = Pin.GPIO15
-LED_BLUE = Pin.GPIO16
-LED_YELLOW = Pin.GPIO17
+LED_RED = Pin.GPIO15     # pin80
+LED_BLUE = Pin.GPIO16    # pin81
+LED_YELLOW = Pin.GPIO17  # pin76
 
 
 class GPSTracker:

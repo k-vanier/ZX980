@@ -1,4 +1,8 @@
-import sms
+try:
+	import sms
+except ImportError:
+	# Some firmwares (e.g. EC800M-CNLE QPY V0005) are built without the sms module
+	sms = None
 import utime
 import modem
 from usr.config import Config
@@ -15,6 +19,9 @@ class SMSHandler:
 
 	def init_sms(self):
 		"""Initialize SMS handler"""
+		if sms is None:
+			print('SMS not supported by this firmware, SMS commands disabled')
+			return
 		try:
 			sms.setCallback(self._sms_callback)
 			print('SMS handler initialized, IMEI:', self.imei)

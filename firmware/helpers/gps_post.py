@@ -13,7 +13,9 @@ SEND_INTERVAL_MS = 60000
 # ZX908 (EC800N / EC800M): GPS AT6558 power on GPIO10 (pin54), NMEA on UART2 (pin17 RX / pin18 TX)
 NMEA_PORT = UART.UART2
 ENABLE_PIN = Pin.GPIO10
-LED_YELLOW = Pin.GPIO17  # pin76
+LED_RED = Pin.GPIO15     # pin80: double blink after each message sent
+LED_YELLOW = Pin.GPIO17  # pin76: fast blink while the GPS has a fix
+FIX_BLINK_MS = 125       # yellow on/off time with a fix (4 Hz)
 FIX_TIMEOUT_MS = 5000    # no valid RMC for this long = fix lost
 
 # Updated by run(), read by the LED thread
@@ -23,17 +25,26 @@ last_position = None  # latest valid fix: 'YYYY-MM-DD hh:mm:ss UTC 49°08'48.0"N
 
 
 def led_thread():
-	"""Yellow LED blinks at 1 Hz while the GPS has a fix, off otherwise"""
+	"""Yellow LED blinks fast while the GPS has a fix, off otherwise"""
 	led = Pin(LED_YELLOW, Pin.OUT, Pin.PULL_DISABLE, 0)
 	while True:
 		if has_fix():
 			led.write(1)
-			utime.sleep_ms(500)
+			utime.sleep_ms(FIX_BLINK_MS)
 			led.write(0)
-			utime.sleep_ms(500)
+			utime.sleep_ms(FIX_BLINK_MS)
 		else:
 			led.write(0)
 			utime.sleep_ms(200)
+
+
+def blink_sent(led):
+	"""Red LED: two quick flashes = message accepted by the server"""
+	for _ in range(2):
+		led.write(1)
+		utime.sleep_ms(80)
+		led.write(0)
+		utime.sleep_ms(120)
 
 
 def has_fix():
@@ -112,6 +123,7 @@ def run():
 	wait_network()
 	uart = UART(NMEA_PORT, 9600, 8, 0, 1, 0)
 	en_pin = Pin(ENABLE_PIN, Pin.OUT, Pin.PULL_DISABLE, 1)
+	red_led = Pin(LED_RED, Pin.OUT, Pin.PULL_DISABLE, 0)
 	print('GPS on, sending position every %d ms to %s:%d%s' % (SEND_INTERVAL_MS, HOST, PORT, PATH))
 	buf = b''
 	last_send = utime.ticks_ms()
@@ -124,6 +136,8 @@ def run():
 					try:
 						status, _ = post_json(HOST, PORT, PATH, {'auteur': AUTHOR, 'texte': last_position})
 						print('HTTP %d: %s' % (status, last_position))
+						if 200 <= status < 300:
+							blink_sent(red_led)
 					except Exception as e:
 						print('POST error:', e)
 				else:

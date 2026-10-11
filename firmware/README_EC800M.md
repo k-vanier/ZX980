@@ -56,7 +56,7 @@ Chacun se copie dans `/usr` avec QPYcom et se lance depuis le REPL avec `exec(op
 | `scan_wifi_gps.py` | Scan Wi-Fi (MAC + RSSI), puis affiche les trames NMEA en continu |
 | `sms_ping.py` | Règle l'APN `free`, tente un SMS (module `sms`, puis AT), puis fait un ping de google.com (`uping`, ou connexion TCP si absent). Mettre le numéro dans `PHONE` |
 | `post_message.py` | POST JSON `{"auteur": ..., "texte": ...}` vers `http://unix.server.bsd:8080/message`. Fournit `post_json()` |
-| `gps_post.py` | Envoie périodiquement l'heure GPS et la position, et fait clignoter la LED jaune quand le GPS a une position |
+| `gps_post.py` | Envoie périodiquement l'heure GPS et la position. LED jaune : position GPS acquise. LED rouge : message envoyé |
 | `main.py` | Lancement automatique de `gps_post.py` au démarrage |
 
 ### Envoi automatique de la position
@@ -71,7 +71,8 @@ Toutes les 60 s (`SEND_INTERVAL_MS`), si le GPS a une position, le serveur reço
 
 - L'heure est en UTC et vient du GPS. La position est en degrés, minutes, secondes, latitude puis longitude.
 - Sans position GPS, rien n'est envoyé.
-- La LED jaune clignote à 1 Hz quand le GPS a une position, et s'éteint s'il n'y a pas de trame RMC valide depuis 5 s.
+- La LED jaune clignote rapidement (4 Hz, `FIX_BLINK_MS`) quand le GPS a une position, et s'éteint s'il n'y a pas de trame RMC valide depuis 5 s.
+- La LED rouge clignote deux fois rapidement à chaque message accepté par le serveur (réponse HTTP 2xx).
 - `main.py` lance le script dans un thread, donc le REPL reste accessible. Le script redémarre 10 s après un plantage, et attend le réseau sans limite de temps au démarrage.
 - Consommation : environ 0,5 Mo par jour.
 

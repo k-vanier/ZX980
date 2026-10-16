@@ -66,10 +66,20 @@ Copier dans `/usr` : **`main.py`, `gps_post.py`, `post_message.py`**, puis redé
 Toutes les 60 s (`SEND_INTERVAL_MS`), si le GPS a une position, le serveur reçoit :
 
 ```json
-{"auteur": "zx908", "texte": "2026-10-10 10:34:16 UTC 49°08'48.0\"N 0°13'36.0\"E"}
+{"texte": "16/10/2026 19:40:39,100%,3D,0°13'36.0\"E,49°08'48.0\"N,45.2m,0.0km/h,10.126.248.157,Free,4G -78dBm,+33600000000,"}
 ```
 
-- L'heure est en UTC et vient du GPS. La position est en degrés, minutes, secondes, latitude puis longitude.
+Format du champ `texte` : `datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vitesse,IP,operator,signal,telephone,`
+
+- **datefrance** : heure GPS convertie en heure de Paris (changement d'heure été/hiver géré).
+- **niveaubat** : pourcentage calculé à partir de la tension batterie (proche de 100 % quand l'USB est branché).
+- **fix2Dou3D** : `2D` ou `3D` (trames GSA), `?` si inconnu.
+- **posX / posY** : longitude puis latitude, en degrés, minutes, secondes.
+- **vitesse** : en km/h (trame RMC).
+- **altitude** : en mètres (trame GGA).
+- **IP** et **operator** : IP mobile et nom de l'opérateur ; `?` si indisponible.
+- **signal** : technologie (`4G`, `3G`, `2G`) et RSSI de la cellule en dBm.
+- **telephone** : numéro enregistré sur la carte SIM (`?` s'il n'y en a pas).
 - Sans position GPS, rien n'est envoyé.
 - La LED jaune clignote rapidement (4 Hz, `FIX_BLINK_MS`) quand le GPS a une position, et s'éteint s'il n'y a pas de trame RMC valide depuis 5 s.
 - La LED rouge clignote deux fois rapidement à chaque message accepté par le serveur (réponse HTTP 2xx).

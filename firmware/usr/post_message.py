@@ -2,10 +2,27 @@ import ujson
 import usocket
 import checkNet
 
-HOST = 'unix.server.bsd'
-PORT = 8080
-PATH = '/message'
-MESSAGE = {'auteur': 'client1', 'texte': 'Bonjour FreeBSD'}
+CONFIG_FILE = '/usr/config.json'
+DEFAULT_CONFIG = {
+	'server_host': 'unix.server.bsd',
+	'server_port': 8080,
+	'server_path': '/message',
+}
+MESSAGE = {'texte': 'Bonjour FreeBSD'}
+
+
+def load_config():
+	"""Read /usr/config.json; missing file or keys fall back to DEFAULT_CONFIG"""
+	config = dict(DEFAULT_CONFIG)
+	try:
+		with open(CONFIG_FILE) as f:
+			config.update(ujson.load(f))
+	except OSError:
+		print('%s not found, using defaults' % CONFIG_FILE)
+	except ValueError as e:
+		print('%s is not valid JSON (%s), using defaults' % (CONFIG_FILE, e))
+	config['server_port'] = int(config['server_port'])
+	return config
 
 
 def post_json(host, port, path, data):
@@ -65,7 +82,8 @@ if __name__ == '__main__':
 	stage, state = checkNet.waitNetworkReady(30)
 	if stage == 3 and state == 1:
 		try:
-			status, body = post_json(HOST, PORT, PATH, MESSAGE)
+			cfg = load_config()
+			status, body = post_json(cfg['server_host'], cfg['server_port'], cfg['server_path'], MESSAGE)
 			print('HTTP', status)
 			print(body)
 		except Exception as e:

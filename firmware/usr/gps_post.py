@@ -2,11 +2,9 @@ import utime
 import _thread
 import checkNet
 from machine import Pin, UART
-from usr.post_message import post_json
+from usr.post_message import post_json, load_config
 
-HOST = 'unix.server.bsd'
-PORT = 8080
-PATH = '/message'
+# Server address: /usr/config.json (server_host, server_port, server_path)
 GPS_INTERVAL_MS = 10000   # short line: GPS position only
 FULL_INTERVAL_MS = 60000  # full line: GPS + battery, network, phone
 
@@ -18,6 +16,10 @@ SENT_BLINKS = 3
 LED_YELLOW = Pin.GPIO17  # pin76: fast blink while the GPS has a fix
 FIX_BLINK_MS = 125       # yellow on/off time with a fix (4 Hz)
 FIX_TIMEOUT_MS = 5000    # no valid RMC for this long = fix lost
+
+LOW_BATTERY_MV = 3500      # power off below this voltage (on battery only)
+LOW_BATTERY_CHECKS = 3     # consecutive low readings required
+BATTERY_CHECK_MS = 30000   # time between two battery checks
 
 # Li-ion voltage -> percentage (same table as usr/battery.py)
 VOLTAGE_TABLE = [
@@ -169,15 +171,60 @@ def france_time(utc):
 	return '%02d/%02d/%04d %02d:%02d:%02d' % (t[2], t[1], t[0], t[3], t[4], t[5])
 
 
-def battery_percent():
+def battery_mv(samples=5):
+	"""Average of a few readings: a 4G transmit burst can pull VBAT down by 50-150 mV"""
 	from misc import Power
-	v = Power.getVbatt() / 1000.0
+	total = 0
+	for _ in range(samples):
+		total += Power.getVbatt()
+		utime.sleep_ms(20)
+	return total // samples
+
+
+def battery_percent(mv):
+	v = mv / 1000.0
 	if v >= VOLTAGE_TABLE[0][0]:
 		return 100
 	for (v_high, p_high), (v_low, p_low) in zip(VOLTAGE_TABLE, VOLTAGE_TABLE[1:]):
 		if v_low <= v <= v_high:
 			return int(p_low + (v - v_low) * (p_high - p_low) / (v_high - v_low))
 	return 0
+
+
+def battery_field():
+	"""'100%(4165mV)'"""
+	mv = battery_mv()
+	return '%d%%(%dmV)' % (battery_percent(mv), mv)
+
+
+def usb_plugged():
+	from misc import USB
+	return USB().getStatus() == 1
+
+
+def battery_thread():
+	"""Power the module off when the battery stays below LOW_BATTERY_MV.
+	Ignored while USB is plugged (charging). LOW_BATTERY_CHECKS readings in a row
+	are required so a single dip during a 4G transmission cannot shut it down."""
+	from misc import Power
+	low_count = 0
+	while True:
+		utime.sleep_ms(BATTERY_CHECK_MS)
+		try:
+			if usb_plugged():
+				low_count = 0
+				continue
+			mv = battery_mv()
+			low_count = low_count + 1 if mv < LOW_BATTERY_MV else 0
+			if low_count:
+				print('Low battery: %d mV (%d/%d)' % (mv, low_count, LOW_BATTERY_CHECKS))
+			if low_count >= LOW_BATTERY_CHECKS:
+				print('Battery below %d mV: powering off' % LOW_BATTERY_MV)
+				Pin(ENABLE_PIN, Pin.OUT, Pin.PULL_DISABLE, 0)  # GPS off
+				utime.sleep_ms(500)
+				Power.powerDown()
+		except Exception as e:
+			print('Battery check error:', e)
 
 
 def safe(fn, default='?'):
@@ -217,9 +264,9 @@ def build_line():
 	import net
 	import sim
 	date, x, y, alt, speed = gps_fields()
-	return '%s,%s%%,%s,%s,%s,%s,%s,%s,%s,%s,%s,' % (
+	return '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,' % (
 		date,
-		safe(battery_percent),
+		safe(battery_field),
 		{2: '2D', 3: '3D'}.get(fix_type, '?'),
 		x, y, alt, speed,
 		safe(lambda: dataCall.getInfo(1, 0)[2][2]),
@@ -241,17 +288,23 @@ def wait_network():
 led_started = False
 
 
-def run():
+def run(config=None):
+	"""config: dict from post_message.load_config() (read from /usr/config.json if None)"""
 	global led_started, gps_fix
+	if config is None:
+		config = load_config()
+	host, port, path = config['server_host'], config['server_port'], config['server_path']
 	if not led_started:  # run() may be restarted by main.py after a crash
 		_thread.start_new_thread(led_thread, ())
+		# started before wait_network(): must work even without 4G coverage
+		_thread.start_new_thread(battery_thread, ())
 		led_started = True
 	wait_network()
 	uart = UART(NMEA_PORT, 9600, 8, 0, 1, 0)
 	en_pin = Pin(ENABLE_PIN, Pin.OUT, Pin.PULL_DISABLE, 1)
 	red_led = Pin(LED_RED, Pin.OUT, Pin.PULL_DISABLE, 0)
 	print('GPS on, sending GPS line every %d ms and full line every %d ms to %s:%d%s' % (
-		GPS_INTERVAL_MS, FULL_INTERVAL_MS, HOST, PORT, PATH))
+		GPS_INTERVAL_MS, FULL_INTERVAL_MS, host, port, path))
 	buf = b''
 	last_gps = last_full = utime.ticks_ms()
 	try:
@@ -268,7 +321,7 @@ def run():
 				if has_fix():
 					try:
 						line = build_line() if full_due else build_gps_line()
-						status, _ = post_json(HOST, PORT, PATH, {'texte': line})
+						status, _ = post_json(host, port, path, {'texte': line})
 						print('HTTP %d: %s' % (status, line))
 						if 200 <= status < 300:
 							blink_sent(red_led)

@@ -1,3 +1,0 @@
-{"apn": {"name": "free", "user": "", "password": ""},
- "server": {"protocol": "GT06", "host": "votre.serveur.com", "port": 5023, "path": "/api/location"},
- "update_interval": 10}

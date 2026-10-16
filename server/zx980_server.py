@@ -6,7 +6,7 @@ Standard library only (no uvicorn/fastapi needed), replaces api.py.
 - Receiver (internet side):   POST http://<host>:8080/message  {"texte": "..."}
 - Dashboard (local network):  http://<host>:8090/
 
-Two kinds of lines are sent by helpers/gps_post.py:
+Two kinds of lines are sent by ZX980/usr/gps_post.py:
   short (every 10 s): date,lon,lat,alt,speed,
   full  (every 60 s): date,battery,fix,lon,lat,alt,speed,ip,operator,network,phone,
 """
@@ -91,7 +91,9 @@ def parse_line(texte):
 		gps = parts[1:5]
 	elif len(parts) == 11:
 		out['kind'] = 'full'
-		out['battery'] = int(number(parts[1], '%') or 0)
+		# '100%' or '100%(4165mV)': the voltage stays available in the raw column
+		m = re.match(r'(\d+)%', parts[1])
+		out['battery'] = int(m.group(1)) if m else None
 		out['fix'] = parts[2]
 		gps = parts[3:7]
 		out['ip'], out['operator'], out['network'], out['phone'] = parts[7:11]

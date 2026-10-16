@@ -13,16 +13,18 @@ Two kinds of lines are sent by helpers/gps_post.py:
 import argparse
 import json
 import logging
+import math
 import re
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 log = logging.getLogger('zx980')
 
 DMS_RE = re.compile(r'''(\d+)°(\d+)'([\d.]+)"([NSEW])''')
+MOVING_KMH = 2.0  # below this speed a track segment is GPS jitter, not distance
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS messages (
@@ -118,22 +120,52 @@ class Store:
 		with self.lock:
 			return [dict(r) for r in self.db.execute(sql, args)]
 
-	def state(self, hours, limit):
-		since = datetime.fromtimestamp(datetime.now().timestamp() - hours * 3600).isoformat(timespec='seconds')
+	def state(self, start, end, limit):
+		"""Last known state + track and messages received between start and end (ISO strings)"""
 		last_full = self.query("SELECT * FROM messages WHERE kind='full' ORDER BY id DESC LIMIT 1")
 		last_pos = self.query('SELECT * FROM messages WHERE lat IS NOT NULL ORDER BY id DESC LIMIT 1')
-		track = self.query('SELECT device_time, lat, lon, speed FROM messages '
-			'WHERE lat IS NOT NULL AND received >= ? ORDER BY id', (since,))
-		recent = self.query('SELECT * FROM messages ORDER BY id DESC LIMIT ?', (limit,))
+		track = self.query('SELECT lat, lon, speed FROM messages '
+			'WHERE lat IS NOT NULL AND NOT (lat = 0 AND lon = 0) AND received BETWEEN ? AND ? ORDER BY id', (start, end))
+		recent = self.query('SELECT * FROM messages WHERE received BETWEEN ? AND ? '
+			'ORDER BY id DESC LIMIT ?', (start, end, limit))
 		count = self.query('SELECT COUNT(*) AS n FROM messages')[0]['n']
+		# stationary GPS jitter (a few metres every 10 s) would add up: count only moving segments
+		dist = sum(haversine_km(a['lat'], a['lon'], b['lat'], b['lon']) for a, b in zip(track, track[1:])
+			if max(a['speed'] or 0, b['speed'] or 0) >= MOVING_KMH)
+		speeds = [t['speed'] for t in track if t['speed'] is not None]
 		return {
 			'now': datetime.now().isoformat(timespec='seconds'),
+			'start': start,
+			'end': end,
 			'last_full': last_full[0] if last_full else None,
 			'last_pos': last_pos[0] if last_pos else None,
 			'track': [[t['lat'], t['lon']] for t in track],
+			'stats': {'points': len(track), 'km': round(dist, 2), 'max_speed': max(speeds, default=None)},
 			'recent': recent,
 			'count': count,
 		}
+
+
+def haversine_km(lat1, lon1, lat2, lon2):
+	p1, p2 = math.radians(lat1), math.radians(lat2)
+	a = math.sin((p2 - p1) / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lon2 - lon1) / 2) ** 2
+	return 2 * 6371.0 * math.asin(math.sqrt(a))
+
+
+def parse_range(q):
+	"""?from=2026-10-16T08:00&to=2026-10-16T18:00 or ?hours=24 -> (start, end) ISO strings"""
+	now = datetime.now()
+	def iso(key, pad):
+		v = q.get(key, [''])[0].strip()
+		if not v:
+			return None
+		datetime.fromisoformat(v)  # validation, raises ValueError
+		return v + pad if len(v) == 16 else v  # datetime-local has no seconds
+	start, end = iso('from', ':00'), iso('to', ':59')
+	if start is None:
+		hours = float(q.get('hours', ['24'])[0])
+		start = (now - timedelta(hours=hours)).isoformat(timespec='seconds')
+	return start, end or now.isoformat(timespec='seconds')
 
 
 class ReceiverHandler(BaseHTTPRequestHandler):
@@ -189,12 +221,20 @@ class WebHandler(BaseHTTPRequestHandler):
 		if url.path == '/':
 			return self.send(200, 'text/html; charset=utf-8', PAGE.encode())
 		if url.path == '/api/state':
-			q = parse_qs(url.query)
-			hours = float(q.get('hours', ['24'])[0])
-			body = json.dumps(self.store.state(hours, 200), ensure_ascii=False).encode()
+			try:
+				start, end = parse_range(parse_qs(url.query))
+			except ValueError as e:
+				return self.send(400, 'text/plain; charset=utf-8', str(e).encode())
+			body = json.dumps(self.store.state(start, end, 500), ensure_ascii=False).encode()
 			return self.send(200, 'application/json; charset=utf-8', body)
 		if url.path == '/api/export.csv':
-			rows = self.store.query('SELECT received, source, raw FROM messages ORDER BY id')
+			q = parse_qs(url.query)
+			try:
+				start, end = parse_range(q) if 'from' in q else ('', '9999')
+			except ValueError as e:
+				return self.send(400, 'text/plain; charset=utf-8', str(e).encode())
+			rows = self.store.query('SELECT received, source, raw FROM messages '
+				'WHERE received BETWEEN ? AND ? ORDER BY id', (start, end))
 			body = '\n'.join('%s;%s;%s' % (r['received'], r['source'], r['raw']) for r in rows).encode()
 			return self.send(200, 'text/csv; charset=utf-8', body)
 		self.send(404, 'text/plain', b'not found')
@@ -217,7 +257,9 @@ header { display:flex; align-items:center; gap:12px; padding:12px 16px; border-b
 header h1 { font-size:18px; margin:0; }
 #age { padding:2px 10px; border-radius:99px; font-weight:600; color:#fff; background:var(--muted); }
 header .sp { flex:1; }
-select, a.btn { font:inherit; padding:4px 8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--fg); text-decoration:none; }
+#range { display:inline-flex; gap:8px; flex-wrap:wrap; align-items:center; }
+#range[hidden] { display:none; }
+select, input, .btn { font:inherit; cursor:pointer; padding:4px 8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--fg); text-decoration:none; }
 main { display:grid; grid-template-columns: 340px 1fr; gap:16px; padding:16px; }
 @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
 .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
@@ -244,11 +286,18 @@ th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var
   <span class="sp"></span>
   <label>Trace <select id="hours">
     <option value="1">1 h</option><option value="6">6 h</option>
-    <option value="24" selected>24 h</option><option value="168">7 j</option></select></label>
-  <a class="btn" href="/api/export.csv">Export CSV</a>
+    <option value="24" selected>24 h</option><option value="168">7 j</option>
+    <option value="custom">Dates…</option></select></label>
+  <span id="range" hidden>
+    <label>du <input type="datetime-local" id="from"></label>
+    <label>au <input type="datetime-local" id="to"></label>
+    <button id="show" class="btn">Afficher</button>
+  </span>
+  <a class="btn" id="csv" href="/api/export.csv">Export CSV</a>
 </header>
 <main>
   <div class="side">
+    <div class="card"><h2>Trajet</h2><dl id="trip"></dl></div>
     <div class="card"><h2>Position</h2><dl id="pos"></dl></div>
     <div class="card"><h2>Appareil</h2><dl id="dev"></dl></div>
   </div>
@@ -270,16 +319,32 @@ const map = L.map('map').setView([46.6, 2.4], 6);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '&copy; OpenStreetMap'}).addTo(map);
 const line = L.polyline([], {color: '#2563eb', weight: 3}).addTo(map);
 const marker = L.circleMarker([0, 0], {radius: 8, color: '#fff', weight: 2, fillColor: '#dc2626', fillOpacity: 1});
-let centered = false;
+const startMarker = L.circleMarker([0, 0], {radius: 7, color: '#fff', weight: 2, fillColor: '#16a34a', fillOpacity: 1});
+let centered = false, fitPending = false;
 
 function dl(el, items) {
   el.innerHTML = items.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('');
 }
 
+// datetime-local value (local time, no seconds)
+const local = d => new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+const custom = () => $('hours').value === 'custom';
+
+function query() {
+  return custom()
+    ? 'from=' + encodeURIComponent($('from').value) + '&to=' + encodeURIComponent($('to').value)
+    : 'hours=' + $('hours').value;
+}
+
 async function refresh() {
   let s;
-  try { s = await (await fetch('/api/state?hours=' + $('hours').value)).json(); }
-  catch (e) { $('age').textContent = 'serveur injoignable'; $('age').style.background = 'var(--bad)'; return; }
+  const q = query();
+  $('csv').href = '/api/export.csv' + (custom() ? '?' + q : '');
+  try {
+    const r = await fetch('/api/state?' + q);
+    if (!r.ok) throw new Error(await r.text());
+    s = await r.json();
+  } catch (e) { $('age').textContent = 'erreur : ' + e.message; $('age').style.background = 'var(--bad)'; return; }
   const p = s.last_pos, d = s.last_full;
   if (p) {
     const age = (new Date(s.now) - new Date(p.received)) / 1000;
@@ -290,7 +355,7 @@ async function refresh() {
       ['Altitude', f(p.alt, 1, ' m')], ['Vitesse', f(p.speed, 1, ' km/h')],
       ['Carte', `<a href="https://www.google.com/maps?q=${p.lat},${p.lon}" target="_blank">Google Maps</a>`]]);
     marker.setLatLng([p.lat, p.lon]).addTo(map);
-    if (!centered) { map.setView([p.lat, p.lon], 17); centered = true; }
+    if (!centered && !custom()) { map.setView([p.lat, p.lon], 17); centered = true; }
   }
   if (d) {
     const b = d.battery ?? 0, col = b > 50 ? 'var(--ok)' : b > 20 ? 'var(--warn)' : 'var(--bad)';
@@ -300,6 +365,15 @@ async function refresh() {
       ['IP', esc(d.ip)], ['Téléphone', esc(d.phone)], ['Dernier état', esc(t(d.received))]]);
   }
   line.setLatLngs(s.track);
+  if (s.track.length) startMarker.setLatLng(s.track[0]).addTo(map); else startMarker.remove();
+  if (fitPending) {
+    fitPending = false;
+    if (s.track.length) map.fitBounds(line.getBounds(), {padding: [30, 30], maxZoom: 17});
+  }
+  const st = s.stats;
+  dl($('trip'), [
+    ['Du', esc(t(s.start))], ['Au', esc(t(s.end))], ['Points', st.points],
+    ['Distance', f(st.km, 2, ' km')], ['Vitesse max', f(st.max_speed, 1, ' km/h')]]);
   $('count').textContent = s.count;
   $('rows').innerHTML = s.recent.map(r => r.kind === 'other'
     ? `<tr><td>${esc(t(r.received))}</td><td><span class="tag">brut</span></td><td colspan="10">${esc(r.raw)}</td></tr>`
@@ -307,7 +381,17 @@ async function refresh() {
       <td>${f(r.lat, 6)}</td><td>${f(r.lon, 6)}</td><td>${f(r.alt, 1, ' m')}</td><td>${f(r.speed, 1, ' km/h')}</td>
       <td>${r.battery == null ? '' : r.battery + ' %'}</td><td>${esc(r.fix)}</td><td>${esc(r.network)}</td><td>${esc(r.operator)}</td><td>${esc(r.ip)}</td></tr>`).join('');
 }
-$('hours').onchange = refresh;
+$('hours').onchange = () => {
+  $('range').hidden = !custom();
+  if (custom() && !$('from').value) {
+    const now = new Date(), midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    $('from').value = local(midnight);
+    $('to').value = local(now);
+  }
+  fitPending = true;
+  refresh();
+};
+$('show').onclick = () => { fitPending = true; refresh(); };
 refresh();
 setInterval(refresh, 5000);
 </script>

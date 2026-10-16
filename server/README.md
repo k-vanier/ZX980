@@ -16,6 +16,8 @@ Deux formats de ligne sont reconnus :
 - courte (toutes les 10 s) : `date,lon,lat,alt,vitesse,`
 - complète (toutes les 60 s) : `date,batterie,fix,lon,lat,alt,vitesse,ip,opérateur,réseau,téléphone,`
 
+Le champ batterie vaut par exemple `100%(4165mV)`. Seul le pourcentage est stocké dans la colonne `battery`. La tension reste disponible dans la ligne brute (`raw`).
+
 Les messages sont stockés dans SQLite (`/var/db/zx980/zx980.sqlite`). Les lignes non reconnues sont gardées en brut.
 
 Tableau de bord (`http://<ip>:8090/`, rafraîchi toutes les 5 s) : état en ligne / hors ligne, carte OpenStreetMap avec la trace (1 h à 7 j, ou champs « du / au » + Afficher), distance et vitesse max du trajet, position, batterie, fix, réseau, opérateur, IP, téléphone, messages de la période, export CSV de la période (`/api/export.csv`).

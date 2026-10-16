@@ -31,13 +31,13 @@ datefrance,posX,posY,altitude,vitesse,
 
 ```
 datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vitesse,IP,operator,signal,telephone,
-16/10/2026 19:40:39,100%,3D,0°13'36.0"E,49°08'48.0"N,45.2m,0.0km/h,10.126.248.157,Free,4G -78dBm,+33600000000,
+16/10/2026 19:40:39,100%(4165mV),3D,0°13'36.0"E,49°08'48.0"N,45.2m,0.0km/h,10.126.248.157,Free,4G -78dBm,+33600000000,
 ```
 
 | Champ | Source | Détail |
 |---|---|---|
 | `datefrance` | GPS (RMC) | Heure UTC convertie en heure de Paris, avec le changement d'heure été/hiver |
-| `niveaubat` | `Power.getVbatt()` | Pourcentage calculé à partir de la tension (environ 100 % quand l'USB est branché) |
+| `niveaubat` | `Power.getVbatt()` | Pourcentage calculé à partir de la tension, suivi de la tension mesurée : `100%(4165mV)`. Moyenne de 5 mesures. Environ 100 % quand l'USB est branché |
 | `fix2Dou3D` | GPS (GSA) | `2D`, `3D`, ou `?` si inconnu |
 | `posX` / `posY` | GPS (RMC) | Longitude puis latitude, en degrés, minutes et secondes |
 | `altitude` | GPS (GGA) | En mètres |
@@ -91,6 +91,9 @@ Tout le dossier se copie dans `/usr` sur le module.
 | `SENT_BLINKS` | `3` | Nombre de flashs rouges par envoi |
 | `FIX_BLINK_MS` | `125` | Vitesse de clignotement de la LED jaune |
 | `FIX_TIMEOUT_MS` | `5000` | Délai sans trame RMC valide au-delà duquel la position est considérée comme perdue |
+| `LOW_BATTERY_MV` | `3500` | Seuil de coupure batterie faible (mV) |
+| `LOW_BATTERY_CHECKS` | `3` | Nombre de mesures basses consécutives avant la coupure |
+| `BATTERY_CHECK_MS` | `30000` | Intervalle entre deux vérifications de la batterie |
 
 ### Scripts de test et de diagnostic
 
@@ -182,6 +185,14 @@ Sources : documentation QuecPython [machine.Pin](https://developer.quectel.com/d
 - **Pas d'accès distant direct (SSH…) :** le module a une IP privée derrière le CGNAT de Free, donc c'est toujours lui qui se connecte au serveur.
 - **HTTP en clair, sans authentification :** la position et le numéro de téléphone circulent en clair. QuecPython gère HTTPS/TLS 1.2 (`ussl`) si besoin.
 - **Batterie :** le pourcentage n'est fiable que sur batterie seule. Le chargeur USB fait remonter la tension.
+
+### Coupure batterie faible
+
+Un thread vérifie la batterie toutes les 30 s (`BATTERY_CHECK_MS`). Si la tension reste sous **3 500 mV** (`LOW_BATTERY_MV`) pendant **3 mesures de suite** (`LOW_BATTERY_CHECKS`, soit environ 1 min 30), le module éteint le GPS puis s'éteint lui-même (`Power.powerDown()`), pour protéger la batterie LiPo d'une décharge profonde.
+
+- La vérification ne s'applique pas quand l'USB est branché (la batterie est en charge).
+- Chaque mesure est une moyenne de 5 lectures, et il en faut 3 basses à la suite : une chute brève pendant une émission 4G ne suffit pas à éteindre le module.
+- Pour le rallumer : bouton d'alimentation, ou branchement du chargeur selon la carte.
 
 ## Particularités de QuecPython V0005
 

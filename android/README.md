@@ -36,10 +36,10 @@ Le mot de passe est enregistré dans les préférences privées de l'appli, sur 
 
 ## Compilation
 
-Outils installés dans `C:\Users\bsdouille\AndroidDev` : JDK Temurin 17 (`jdk17`), SDK Android (`sdk`, plateforme 35). `local.properties` (non versionné) pointe vers le SDK.
+Outils installés dans `C:\Users\user\AndroidDev` : JDK Temurin 17 (`jdk17`), SDK Android (`sdk`, plateforme 35). `local.properties` (non versionné) pointe vers le SDK.
 
 ```powershell
-$env:JAVA_HOME = "C:\Users\bsdouille\AndroidDev\jdk17"
+$env:JAVA_HOME = "C:\Users\user\AndroidDev\jdk17"
 .\gradlew.bat assembleDebug
 ```
 

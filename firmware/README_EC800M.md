@@ -63,7 +63,17 @@ Chacun se copie dans `/usr` avec QPYcom et se lance depuis le REPL avec `exec(op
 
 Copier dans `/usr` : **`main.py`, `gps_post.py`, `post_message.py`**, puis redémarrer le module. Ce `main.py` remplace celui du tracker.
 
-Toutes les 60 s (`SEND_INTERVAL_MS`), si le GPS a une position, le serveur reçoit :
+Si le GPS a une position, deux types de lignes sont envoyés au même endpoint :
+
+- **toutes les 10 s** (`GPS_INTERVAL_MS`) : ligne courte, 5 champs.
+
+```json
+{"texte": "16/10/2026 19:40:39,0°13'36.0\"E,49°08'48.0\"N,45.2m,0.0km/h,"}
+```
+
+Format : `datefrance,posX,posY,altitude,vitesse,`
+
+- **toutes les 60 s** (`FULL_INTERVAL_MS`) : ligne complète, 11 champs. Elle remplace la ligne courte de ce moment-là.
 
 ```json
 {"texte": "16/10/2026 19:40:39,100%,3D,0°13'36.0\"E,49°08'48.0\"N,45.2m,0.0km/h,10.126.248.157,Free,4G -78dBm,+33600000000,"}
@@ -82,9 +92,10 @@ Format du champ `texte` : `datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vit
 - **telephone** : numéro enregistré sur la carte SIM (`?` s'il n'y en a pas).
 - Sans position GPS, rien n'est envoyé.
 - La LED jaune clignote rapidement (4 Hz, `FIX_BLINK_MS`) quand le GPS a une position, et s'éteint s'il n'y a pas de trame RMC valide depuis 5 s.
-- La LED rouge clignote deux fois rapidement à chaque message accepté par le serveur (réponse HTTP 2xx).
+- La LED rouge clignote trois fois rapidement (`SENT_BLINKS`) à chaque message accepté par le serveur (réponse HTTP 2xx).
 - `main.py` lance le script dans un thread, donc le REPL reste accessible. Le script redémarre 10 s après un plantage, et attend le réseau sans limite de temps au démarrage.
-- Consommation : environ 0,5 Mo par jour.
+- Consommation : environ 2 à 3 Mo par jour (en-têtes HTTP compris).
+- Le serveur distingue les deux lignes par leur nombre de champs : 5 pour la ligne courte, 11 pour la ligne complète.
 
 Pour désactiver le lancement au démarrage, supprimer ou renommer `/usr/main.py`.
 

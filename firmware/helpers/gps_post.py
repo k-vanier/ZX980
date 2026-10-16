@@ -7,12 +7,14 @@ from usr.post_message import post_json
 HOST = 'unix.server.bsd'
 PORT = 8080
 PATH = '/message'
-SEND_INTERVAL_MS = 60000
+GPS_INTERVAL_MS = 10000   # short line: GPS position only
+FULL_INTERVAL_MS = 60000  # full line: GPS + battery, network, phone
 
 # ZX908 (EC800N / EC800M): GPS AT6558 power on GPIO10 (pin54), NMEA on UART2 (pin17 RX / pin18 TX)
 NMEA_PORT = UART.UART2
 ENABLE_PIN = Pin.GPIO10
-LED_RED = Pin.GPIO15     # pin80: double blink after each message sent
+LED_RED = Pin.GPIO15     # pin80: SENT_BLINKS quick flashes after each message sent
+SENT_BLINKS = 3
 LED_YELLOW = Pin.GPIO17  # pin76: fast blink while the GPS has a fix
 FIX_BLINK_MS = 125       # yellow on/off time with a fix (4 Hz)
 FIX_TIMEOUT_MS = 5000    # no valid RMC for this long = fix lost
@@ -52,8 +54,8 @@ def led_thread():
 
 
 def blink_sent(led):
-	"""Red LED: two quick flashes = message accepted by the server"""
-	for _ in range(2):
+	"""Red LED: SENT_BLINKS quick flashes = message accepted by the server"""
+	for _ in range(SENT_BLINKS):
 		led.write(1)
 		utime.sleep_ms(80)
 		led.write(0)
@@ -194,19 +196,32 @@ def cell_signal():
 	return '%s %ddBm' % (tech, rssi)
 
 
+def gps_fields():
+	"""datefrance,posX,posY,altitude,vitesse (shared by both lines)"""
+	return (
+		france_time(last_utc),
+		to_dms(last_lon, 'E', 'W'),   # X = longitude
+		to_dms(last_lat, 'N', 'S'),   # Y = latitude
+		'%.1fm' % last_altitude if last_altitude is not None else '?',
+		'%.1fkm/h' % last_speed_kmh)
+
+
+def build_gps_line():
+	"""datefrance,posX,posY,altitude,vitesse,"""
+	return '%s,%s,%s,%s,%s,' % gps_fields()
+
+
 def build_line():
 	"""datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vitesse,IP,operator,signal,telephone,"""
 	import dataCall
 	import net
 	import sim
-	return '%s,%s%%,%s,%s,%s,%s,%.1fkm/h,%s,%s,%s,%s,' % (
-		france_time(last_utc),
+	date, x, y, alt, speed = gps_fields()
+	return '%s,%s%%,%s,%s,%s,%s,%s,%s,%s,%s,%s,' % (
+		date,
 		safe(battery_percent),
 		{2: '2D', 3: '3D'}.get(fix_type, '?'),
-		to_dms(last_lon, 'E', 'W'),   # X = longitude
-		to_dms(last_lat, 'N', 'S'),   # Y = latitude
-		'%.1fm' % last_altitude if last_altitude is not None else '?',
-		last_speed_kmh,
+		x, y, alt, speed,
 		safe(lambda: dataCall.getInfo(1, 0)[2][2]),
 		safe(lambda: net.operatorName()[0]),
 		safe(cell_signal),
@@ -235,17 +250,24 @@ def run():
 	uart = UART(NMEA_PORT, 9600, 8, 0, 1, 0)
 	en_pin = Pin(ENABLE_PIN, Pin.OUT, Pin.PULL_DISABLE, 1)
 	red_led = Pin(LED_RED, Pin.OUT, Pin.PULL_DISABLE, 0)
-	print('GPS on, sending position every %d ms to %s:%d%s' % (SEND_INTERVAL_MS, HOST, PORT, PATH))
+	print('GPS on, sending GPS line every %d ms and full line every %d ms to %s:%d%s' % (
+		GPS_INTERVAL_MS, FULL_INTERVAL_MS, HOST, PORT, PATH))
 	buf = b''
-	last_send = utime.ticks_ms()
+	last_gps = last_full = utime.ticks_ms()
 	try:
 		while True:
 			buf = read_nmea(uart, buf)
-			if utime.ticks_diff(utime.ticks_ms(), last_send) >= SEND_INTERVAL_MS:
-				last_send = utime.ticks_ms()
+			now = utime.ticks_ms()
+			full_due = utime.ticks_diff(now, last_full) >= FULL_INTERVAL_MS
+			gps_due = utime.ticks_diff(now, last_gps) >= GPS_INTERVAL_MS
+			if full_due or gps_due:
+				# the full line already contains the GPS fields: never send both at once
+				last_gps = now
+				if full_due:
+					last_full = now
 				if has_fix():
 					try:
-						line = build_line()
+						line = build_line() if full_due else build_gps_line()
 						status, _ = post_json(HOST, PORT, PATH, {'texte': line})
 						print('HTTP %d: %s' % (status, line))
 						if 200 <= status < 300:

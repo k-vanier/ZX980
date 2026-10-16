@@ -6,7 +6,7 @@ Standard library only (no uvicorn/fastapi needed), replaces api.py.
 - Receiver (internet side):   POST http://<host>:8080/message  {"texte": "..."}
 - Dashboard (local network):  http://<host>:8090/
 
-Two kinds of lines are sent by helpers/gps_post.py:
+Two kinds of lines are sent by ZX980/usr/gps_post.py:
   short (every 10 s): date,lon,lat,alt,speed,
   full  (every 60 s): date,battery,fix,lon,lat,alt,speed,ip,operator,network,phone,
 """

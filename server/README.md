@@ -1,6 +1,6 @@
 # ZX980 Server
 
-Serveur FreeBSD pour le traceur ZX980 (module Quectel EC800M) : reçoit les trames GPS envoyées par `helpers/gps_post.py` et les affiche sur un tableau de bord web.
+Serveur FreeBSD pour le traceur ZX980 (module Quectel EC800M) : reçoit les trames GPS envoyées par `ZX980/usr/gps_post.py` et les affiche sur un tableau de bord web.
 
 Python 3 standard uniquement (pas de uvicorn, fastapi ni nginx).
 

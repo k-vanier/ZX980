@@ -121,14 +121,19 @@ class Store:
 			return [dict(r) for r in self.db.execute(sql, args)]
 
 	def state(self, start, end, limit):
-		"""Last known state + track and messages received between start and end (ISO strings)"""
-		last_full = self.query("SELECT * FROM messages WHERE kind='full' ORDER BY id DESC LIMIT 1")
-		last_pos = self.query('SELECT * FROM messages WHERE lat IS NOT NULL ORDER BY id DESC LIMIT 1')
+		"""Everything computed on messages received between start and end (ISO strings),
+		except last_seen (latest message overall, for the online badge)"""
+		rng = (start, end)
+		last_seen = self.query('SELECT MAX(received) AS r FROM messages')[0]['r']
+		last_full = self.query("SELECT * FROM messages WHERE kind='full' AND received BETWEEN ? AND ? "
+			'ORDER BY id DESC LIMIT 1', rng)
+		last_pos = self.query('SELECT * FROM messages WHERE lat IS NOT NULL AND received BETWEEN ? AND ? '
+			'ORDER BY id DESC LIMIT 1', rng)
 		track = self.query('SELECT lat, lon, speed FROM messages '
-			'WHERE lat IS NOT NULL AND NOT (lat = 0 AND lon = 0) AND received BETWEEN ? AND ? ORDER BY id', (start, end))
+			'WHERE lat IS NOT NULL AND NOT (lat = 0 AND lon = 0) AND received BETWEEN ? AND ? ORDER BY id', rng)
 		recent = self.query('SELECT * FROM messages WHERE received BETWEEN ? AND ? '
-			'ORDER BY id DESC LIMIT ?', (start, end, limit))
-		count = self.query('SELECT COUNT(*) AS n FROM messages')[0]['n']
+			'ORDER BY id DESC LIMIT ?', rng + (limit,))
+		count = self.query('SELECT COUNT(*) AS n FROM messages WHERE received BETWEEN ? AND ?', rng)[0]['n']
 		# stationary GPS jitter (a few metres every 10 s) would add up: count only moving segments
 		dist = sum(haversine_km(a['lat'], a['lon'], b['lat'], b['lon']) for a, b in zip(track, track[1:])
 			if max(a['speed'] or 0, b['speed'] or 0) >= MOVING_KMH)
@@ -138,6 +143,7 @@ class Store:
 			'tz': datetime.now().astimezone().isoformat()[-6:],  # server UTC offset, e.g. +00:00
 			'start': start,
 			'end': end,
+			'last_seen': last_seen,
 			'last_full': last_full[0] if last_full else None,
 			'last_pos': last_pos[0] if last_pos else None,
 			'track': [[t['lat'], t['lon']] for t in track],
@@ -302,7 +308,7 @@ th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var
     <div class="card"><h2>Appareil</h2><dl id="dev"></dl></div>
   </div>
   <div id="map"></div>
-  <div class="card wide"><h2>Derniers messages (<span id="count">0</span> au total)</h2>
+  <div class="card wide"><h2>Messages de la période (<span id="count">0</span>)</h2>
     <div class="scroll"><table><thead><tr>
       <th>Reçu</th><th>Type</th><th>Heure GPS</th><th>Lat</th><th>Lon</th><th>Alt</th><th>Vitesse</th>
       <th>Batt.</th><th>Fix</th><th>Réseau</th><th>Opérateur</th><th>IP</th></tr></thead>
@@ -354,10 +360,14 @@ async function refresh() {
     srvTz = s.tz;
   } catch (e) { $('age').textContent = 'erreur : ' + e.message; $('age').style.background = 'var(--bad)'; return; }
   const p = s.last_pos, d = s.last_full;
-  if (p) {
-    const age = (new Date(s.now) - new Date(p.received)) / 1000;
-    $('age').textContent = age < 60 ? `en ligne · ${Math.round(age)} s` : age < 3600 ? `vu il y a ${Math.round(age/60)} min` : `hors ligne · ${tl(p.received)}`;
+  const none = '<dt style="grid-column:1/-1">Aucune donnée sur la période</dt>';
+  if (s.last_seen) {
+    const age = (new Date(s.now) - new Date(s.last_seen)) / 1000;
+    $('age').textContent = age < 60 ? `en ligne · ${Math.round(age)} s` : age < 3600 ? `vu il y a ${Math.round(age/60)} min` : `hors ligne · ${tl(s.last_seen)}`;
     $('age').style.background = age < 30 ? 'var(--ok)' : age < 300 ? 'var(--warn)' : 'var(--bad)';
+  }
+  if (!p) { $('pos').innerHTML = none; marker.remove(); }
+  else {
     dl($('pos'), [
       ['Heure GPS', esc(t(p.device_time))], ['Latitude', f(p.lat, 6)], ['Longitude', f(p.lon, 6)],
       ['Altitude', f(p.alt, 1, ' m')], ['Vitesse', f(p.speed, 1, ' km/h')],
@@ -365,7 +375,8 @@ async function refresh() {
     marker.setLatLng([p.lat, p.lon]).addTo(map);
     if (!centered && !custom()) { map.setView([p.lat, p.lon], 17); centered = true; }
   }
-  if (d) {
+  if (!d) $('dev').innerHTML = none;
+  else {
     const b = d.battery ?? 0, col = b > 50 ? 'var(--ok)' : b > 20 ? 'var(--warn)' : 'var(--bad)';
     dl($('dev'), [
       ['Batterie', `${b} %<div class="bar"><div style="width:${b}%;background:${col}"></div></div>`],
@@ -379,7 +390,8 @@ async function refresh() {
     if (s.track.length) map.fitBounds(line.getBounds(), {padding: [30, 30], maxZoom: 17});
   }
   const st = s.stats;
-  dl($('trip'), [
+  if (s.start > s.end) $('trip').innerHTML = '<dt style="grid-column:1/-1;color:var(--bad)">La date de début est après la date de fin</dt>';
+  else dl($('trip'), [
     ['Du', esc(tl(s.start))], ['Au', esc(tl(s.end))], ['Points', st.points],
     ['Distance', f(st.km, 2, ' km')], ['Vitesse max', f(st.max_speed, 1, ' km/h')]]);
   $('count').textContent = s.count;

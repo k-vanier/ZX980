@@ -18,7 +18,7 @@ Ce projet est adapté de [FoxExe/ZX908](https://github.com/FoxExe/ZX908), écrit
 
 ### Messages envoyés
 
-Requête `POST http://unix.server.bsd:8080/message`, avec le corps JSON `{"texte": "<ligne CSV>"}`.
+Requête `POST http://<server_host>:<server_port><server_path>` (réglés dans [`usr/config.json`](usr/config.json)), avec le corps JSON `{"texte": "<ligne CSV>"}`.
 
 **Ligne courte (toutes les 10 s), 5 champs :**
 
@@ -67,13 +67,25 @@ Tout le dossier se copie dans `/usr` sur le module.
 |---|---|
 | `main.py` | Lancé automatiquement au démarrage : exécute `gps_post.run()` dans un thread et le relance en cas de plantage |
 | `gps_post.py` | Lecture du GPS, construction des lignes CSV, envoi périodique, gestion des LEDs |
-| `post_message.py` | Fonction `post_json()` : requête POST JSON en HTTP, adaptée aux particularités de QuecPython |
+| `post_message.py` | Fonction `post_json()` : requête POST JSON en HTTP, adaptée aux particularités de QuecPython. Fonction `load_config()` : lecture de `config.json` |
+| `config.json` | Adresse du serveur API (voir ci-dessous) |
 
-### Réglages (en haut de `gps_post.py`)
+### Adresse du serveur : `config.json`
+
+```json
+{
+	"server_host": "unix.server.bsd",
+	"server_port": 8080,
+	"server_path": "/message"
+}
+```
+
+`main.py`, `gps_post.py` et `post_message.py` lisent ce fichier. Pour changer de serveur, modifiez `/usr/config.json` sur le module et redémarrez : le code ne change pas. Si le fichier est absent ou invalide, le script affiche un message et utilise les valeurs ci-dessus. Au démarrage, `main.py` affiche l'adresse utilisée (`Server: ...`).
+
+### Autres réglages (en haut de `gps_post.py`)
 
 | Constante | Défaut | Rôle |
 |---|---|---|
-| `HOST`, `PORT`, `PATH` | `unix.server.bsd`, `8080`, `/message` | Adresse du serveur |
 | `GPS_INTERVAL_MS` | `10000` | Intervalle de la ligne courte |
 | `FULL_INTERVAL_MS` | `60000` | Intervalle de la ligne complète |
 | `SENT_BLINKS` | `3` | Nombre de flashs rouges par envoi |
@@ -103,7 +115,7 @@ Pendant les tests GPS, renommez `main.py`, sinon `gps_post` utilise le GPS en m�
 ## Installation
 
 1. **Firmware :** flasher [`Firmware/QPY_OCPU_V0005_EC800M_CNLE_FW.bin`](Firmware/QPY_OCPU_V0005_EC800M_CNLE_FW.bin) avec [QPYcom](https://python.quectel.com/en/wp-content/uploads/sites/2/2024/11/QPYcom_V3.6.0.zip). Installer d'abord les [pilotes USB Quectel](https://python.quectel.com/wp-content/uploads/2024/09/Quectel_Windows_USB_DriverA_Customer_V1.1.13.zip).
-2. **Code :** copier le contenu de `usr/` dans `/usr` sur le module, dans l'onglet Fichier de QPYcom.
+2. **Code :** régler l'adresse du serveur dans `usr/config.json`, puis copier tout le contenu de `usr/` (avec `config.json`) dans `/usr` sur le module, dans l'onglet Fichier de QPYcom.
 3. **Vérification :** lancer `check_ec800m.py` depuis le REPL.
 4. **Démarrage :** redémarrer le module. L'envoi commence dès que la 4G est connectée et que le GPS a une position.
 

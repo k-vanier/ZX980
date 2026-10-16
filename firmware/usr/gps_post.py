@@ -2,11 +2,9 @@ import utime
 import _thread
 import checkNet
 from machine import Pin, UART
-from usr.post_message import post_json
+from usr.post_message import post_json, load_config
 
-HOST = 'unix.server.bsd'
-PORT = 8080
-PATH = '/message'
+# Server address: /usr/config.json (server_host, server_port, server_path)
 GPS_INTERVAL_MS = 10000   # short line: GPS position only
 FULL_INTERVAL_MS = 60000  # full line: GPS + battery, network, phone
 
@@ -241,8 +239,12 @@ def wait_network():
 led_started = False
 
 
-def run():
+def run(config=None):
+	"""config: dict from post_message.load_config() (read from /usr/config.json if None)"""
 	global led_started, gps_fix
+	if config is None:
+		config = load_config()
+	host, port, path = config['server_host'], config['server_port'], config['server_path']
 	if not led_started:  # run() may be restarted by main.py after a crash
 		_thread.start_new_thread(led_thread, ())
 		led_started = True
@@ -251,7 +253,7 @@ def run():
 	en_pin = Pin(ENABLE_PIN, Pin.OUT, Pin.PULL_DISABLE, 1)
 	red_led = Pin(LED_RED, Pin.OUT, Pin.PULL_DISABLE, 0)
 	print('GPS on, sending GPS line every %d ms and full line every %d ms to %s:%d%s' % (
-		GPS_INTERVAL_MS, FULL_INTERVAL_MS, HOST, PORT, PATH))
+		GPS_INTERVAL_MS, FULL_INTERVAL_MS, host, port, path))
 	buf = b''
 	last_gps = last_full = utime.ticks_ms()
 	try:
@@ -268,7 +270,7 @@ def run():
 				if has_fix():
 					try:
 						line = build_line() if full_due else build_gps_line()
-						status, _ = post_json(HOST, PORT, PATH, {'texte': line})
+						status, _ = post_json(host, port, path, {'texte': line})
 						print('HTTP %d: %s' % (status, line))
 						if 200 <= status < 300:
 							blink_sent(red_led)

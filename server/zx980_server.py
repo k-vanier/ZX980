@@ -135,6 +135,7 @@ class Store:
 		speeds = [t['speed'] for t in track if t['speed'] is not None]
 		return {
 			'now': datetime.now().isoformat(timespec='seconds'),
+			'tz': datetime.now().astimezone().isoformat()[-6:],  # server UTC offset, e.g. +00:00
 			'start': start,
 			'end': end,
 			'last_full': last_full[0] if last_full else None,
@@ -258,7 +259,6 @@ header h1 { font-size:18px; margin:0; }
 #age { padding:2px 10px; border-radius:99px; font-weight:600; color:#fff; background:var(--muted); }
 header .sp { flex:1; }
 #range { display:inline-flex; gap:8px; flex-wrap:wrap; align-items:center; }
-#range[hidden] { display:none; }
 select, input, .btn { font:inherit; cursor:pointer; padding:4px 8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--fg); text-decoration:none; }
 main { display:grid; grid-template-columns: 340px 1fr; gap:16px; padding:16px; }
 @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
@@ -287,8 +287,8 @@ th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var
   <label>Trace <select id="hours">
     <option value="1">1 h</option><option value="6">6 h</option>
     <option value="24" selected>24 h</option><option value="168">7 j</option>
-    <option value="custom">Dates…</option></select></label>
-  <span id="range" hidden>
+    <option value="custom">Période choisie</option></select></label>
+  <span id="range">
     <label>du <input type="datetime-local" id="from"></label>
     <label>au <input type="datetime-local" id="to"></label>
     <button id="show" class="btn">Afficher</button>
@@ -326,13 +326,20 @@ function dl(el, items) {
   el.innerHTML = items.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('');
 }
 
-// datetime-local value (local time, no seconds)
-const local = d => new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+// Server times are naive in the server's timezone (often UTC on FreeBSD): convert to/from the browser's
+let srvTz = '+00:00';
+const local = (d, n = 16) => new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, n);
+const tl = s => s ? local(new Date(s + srvTz), 19).replace('T', ' ') : '—';
+const toServer = v => {
+  if (!v) return '';
+  const off = (srvTz[0] === '-' ? -1 : 1) * (parseInt(srvTz.slice(1, 3)) * 60 + parseInt(srvTz.slice(4, 6)));
+  return new Date(new Date(v).getTime() + off * 60000).toISOString().slice(0, 19);
+};
 const custom = () => $('hours').value === 'custom';
 
 function query() {
   return custom()
-    ? 'from=' + encodeURIComponent($('from').value) + '&to=' + encodeURIComponent($('to').value)
+    ? 'from=' + encodeURIComponent(toServer($('from').value)) + '&to=' + encodeURIComponent(toServer($('to').value && $('to').value + ':59'))
     : 'hours=' + $('hours').value;
 }
 
@@ -344,11 +351,12 @@ async function refresh() {
     const r = await fetch('/api/state?' + q);
     if (!r.ok) throw new Error(await r.text());
     s = await r.json();
+    srvTz = s.tz;
   } catch (e) { $('age').textContent = 'erreur : ' + e.message; $('age').style.background = 'var(--bad)'; return; }
   const p = s.last_pos, d = s.last_full;
   if (p) {
     const age = (new Date(s.now) - new Date(p.received)) / 1000;
-    $('age').textContent = age < 60 ? `en ligne · ${Math.round(age)} s` : age < 3600 ? `vu il y a ${Math.round(age/60)} min` : `hors ligne · ${t(p.received)}`;
+    $('age').textContent = age < 60 ? `en ligne · ${Math.round(age)} s` : age < 3600 ? `vu il y a ${Math.round(age/60)} min` : `hors ligne · ${tl(p.received)}`;
     $('age').style.background = age < 30 ? 'var(--ok)' : age < 300 ? 'var(--warn)' : 'var(--bad)';
     dl($('pos'), [
       ['Heure GPS', esc(t(p.device_time))], ['Latitude', f(p.lat, 6)], ['Longitude', f(p.lon, 6)],
@@ -362,7 +370,7 @@ async function refresh() {
     dl($('dev'), [
       ['Batterie', `${b} %<div class="bar"><div style="width:${b}%;background:${col}"></div></div>`],
       ['Fix GPS', esc(d.fix)], ['Réseau', esc(d.network)], ['Opérateur', esc(d.operator)],
-      ['IP', esc(d.ip)], ['Téléphone', esc(d.phone)], ['Dernier état', esc(t(d.received))]]);
+      ['IP', esc(d.ip)], ['Téléphone', esc(d.phone)], ['Dernier état', esc(tl(d.received))]]);
   }
   line.setLatLngs(s.track);
   if (s.track.length) startMarker.setLatLng(s.track[0]).addTo(map); else startMarker.remove();
@@ -372,26 +380,22 @@ async function refresh() {
   }
   const st = s.stats;
   dl($('trip'), [
-    ['Du', esc(t(s.start))], ['Au', esc(t(s.end))], ['Points', st.points],
+    ['Du', esc(tl(s.start))], ['Au', esc(tl(s.end))], ['Points', st.points],
     ['Distance', f(st.km, 2, ' km')], ['Vitesse max', f(st.max_speed, 1, ' km/h')]]);
   $('count').textContent = s.count;
   $('rows').innerHTML = s.recent.map(r => r.kind === 'other'
-    ? `<tr><td>${esc(t(r.received))}</td><td><span class="tag">brut</span></td><td colspan="10">${esc(r.raw)}</td></tr>`
-    : `<tr><td>${esc(t(r.received))}</td><td><span class="tag ${r.kind}">${r.kind}</span></td><td>${esc(t(r.device_time))}</td>
+    ? `<tr><td>${esc(tl(r.received))}</td><td><span class="tag">brut</span></td><td colspan="10">${esc(r.raw)}</td></tr>`
+    : `<tr><td>${esc(tl(r.received))}</td><td><span class="tag ${r.kind}">${r.kind}</span></td><td>${esc(t(r.device_time))}</td>
       <td>${f(r.lat, 6)}</td><td>${f(r.lon, 6)}</td><td>${f(r.alt, 1, ' m')}</td><td>${f(r.speed, 1, ' km/h')}</td>
       <td>${r.battery == null ? '' : r.battery + ' %'}</td><td>${esc(r.fix)}</td><td>${esc(r.network)}</td><td>${esc(r.operator)}</td><td>${esc(r.ip)}</td></tr>`).join('');
 }
-$('hours').onchange = () => {
-  $('range').hidden = !custom();
-  if (custom() && !$('from').value) {
-    const now = new Date(), midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    $('from').value = local(midnight);
-    $('to').value = local(now);
-  }
-  fitPending = true;
-  refresh();
-};
-$('show').onclick = () => { fitPending = true; refresh(); };
+// default range: today from midnight to now
+const now = new Date();
+$('from').value = local(new Date(now.getFullYear(), now.getMonth(), now.getDate()));
+$('to').value = local(now);
+$('hours').onchange = () => { fitPending = true; refresh(); };
+$('show').onclick = () => { $('hours').value = 'custom'; fitPending = true; refresh(); };
+$('from').onchange = $('to').onchange = $('show').onclick;
 refresh();
 setInterval(refresh, 5000);
 </script>

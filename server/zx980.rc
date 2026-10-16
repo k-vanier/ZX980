@@ -1,0 +1,50 @@
+#!/bin/sh
+#
+# PROVIDE: zx980
+# REQUIRE: LOGIN NETWORKING
+# KEYWORD: shutdown
+#
+# Installation : cp zx980.rc /usr/local/etc/rc.d/zx980 && chmod 555 /usr/local/etc/rc.d/zx980
+#
+# Variables /etc/rc.conf (sysrc) :
+#   zx980_enable="YES"
+#   zx980_runas="www"                                 utilisateur du script (pas zx980_user : rc.subr lancerait daemon lui-même via su)
+#   zx980_python="/usr/local/bin/python3.12"
+#   zx980_script="/usr/local/libexec/zx980_server.py"
+#   zx980_dbdir="/var/db/zx980"
+#   zx980_args="--api-port 8080 --web-port 8090"
+
+. /etc/rc.subr
+
+name="zx980"
+rcvar="zx980_enable"
+
+load_rc_config $name
+
+: ${zx980_enable:="NO"}
+: ${zx980_runas:="www"}
+: ${zx980_python:="/usr/local/bin/python3.12"}
+: ${zx980_script:="/usr/local/libexec/zx980_server.py"}
+: ${zx980_dbdir:="/var/db/zx980"}
+: ${zx980_logfile:="/var/log/zx980.log"}
+: ${zx980_args:=""}
+
+piddir="/var/run/${name}"
+pidfile="${piddir}/${name}.pid"
+child_pidfile="${piddir}/child.pid"
+procname="/usr/sbin/daemon"
+command="/usr/sbin/daemon"
+command_args="-r -R 5 -P ${pidfile} -p ${child_pidfile} -o ${zx980_logfile} -t ${name} \
+	-u ${zx980_runas} ${zx980_python} -u ${zx980_script} --db ${zx980_dbdir}/zx980.sqlite ${zx980_args}"
+
+start_precmd="${name}_prestart"
+
+zx980_prestart()
+{
+	install -d -o ${zx980_runas} -m 750 ${zx980_dbdir}
+	install -d -o ${zx980_runas} -m 755 ${piddir}
+	touch ${zx980_logfile}
+	chown ${zx980_runas} ${zx980_logfile}
+}
+
+run_rc_command "$1"

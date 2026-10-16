@@ -43,4 +43,10 @@ $env:JAVA_HOME = "C:\Users\bsdouille\AndroidDev\jdk17"
 .\gradlew.bat assembleDebug
 ```
 
-L'APK est produit dans `app\build\outputs\apk\debug\app-debug.apk`. Il est signé avec la clé de débogage : il s'installe directement, mais ne peut pas être publié sur le Play Store.
+L'APK est produit dans `app\build\outputs\apk\debug\app-debug.apk`. Pour mettre à jour `ZX980.apk` dans le dépôt :
+
+```powershell
+Copy-Item app\build\outputs\apk\debug\app-debug.apk ZX980.apk
+```
+
+Il est signé avec la clé de débogage : il s'installe directement, mais ne peut pas être publié sur le Play Store.

@@ -56,24 +56,46 @@ Chacun se copie dans `/usr` avec QPYcom et se lance depuis le REPL avec `exec(op
 | `scan_wifi_gps.py` | Scan Wi-Fi (MAC + RSSI), puis affiche les trames NMEA en continu |
 | `sms_ping.py` | Règle l'APN `free`, tente un SMS (module `sms`, puis AT), puis fait un ping de google.com (`uping`, ou connexion TCP si absent). Mettre le numéro dans `PHONE` |
 | `post_message.py` | POST JSON `{"auteur": ..., "texte": ...}` vers `http://unix.server.bsd:8080/message`. Fournit `post_json()` |
-| `gps_post.py` | Envoie périodiquement l'heure GPS et la position, et fait clignoter la LED jaune quand le GPS a une position |
+| `gps_post.py` | Envoie périodiquement l'heure GPS et la position. LED jaune : position GPS acquise. LED rouge : message envoyé |
 | `main.py` | Lancement automatique de `gps_post.py` au démarrage |
 
 ### Envoi automatique de la position
 
 Copier dans `/usr` : **`main.py`, `gps_post.py`, `post_message.py`**, puis redémarrer le module. Ce `main.py` remplace celui du tracker.
 
-Toutes les 60 s (`SEND_INTERVAL_MS`), si le GPS a une position, le serveur reçoit :
+Si le GPS a une position, deux types de lignes sont envoyés au même endpoint :
+
+- **toutes les 10 s** (`GPS_INTERVAL_MS`) : ligne courte, 5 champs.
 
 ```json
-{"auteur": "zx908", "texte": "2026-10-10 10:34:16 UTC 49°08'48.0\"N 0°13'36.0\"E"}
+{"texte": "16/10/2026 19:40:39,0°13'36.0\"E,49°08'48.0\"N,45.2m,0.0km/h,"}
 ```
 
-- L'heure est en UTC et vient du GPS. La position est en degrés, minutes, secondes, latitude puis longitude.
+Format : `datefrance,posX,posY,altitude,vitesse,`
+
+- **toutes les 60 s** (`FULL_INTERVAL_MS`) : ligne complète, 11 champs. Elle remplace la ligne courte de ce moment-là.
+
+```json
+{"texte": "16/10/2026 19:40:39,100%,3D,0°13'36.0\"E,49°08'48.0\"N,45.2m,0.0km/h,10.126.248.157,Free,4G -78dBm,+33600000000,"}
+```
+
+Format du champ `texte` : `datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vitesse,IP,operator,signal,telephone,`
+
+- **datefrance** : heure GPS convertie en heure de Paris (changement d'heure été/hiver géré).
+- **niveaubat** : pourcentage calculé à partir de la tension batterie (proche de 100 % quand l'USB est branché).
+- **fix2Dou3D** : `2D` ou `3D` (trames GSA), `?` si inconnu.
+- **posX / posY** : longitude puis latitude, en degrés, minutes, secondes.
+- **vitesse** : en km/h (trame RMC).
+- **altitude** : en mètres (trame GGA).
+- **IP** et **operator** : IP mobile et nom de l'opérateur ; `?` si indisponible.
+- **signal** : technologie (`4G`, `3G`, `2G`) et RSSI de la cellule en dBm.
+- **telephone** : numéro enregistré sur la carte SIM (`?` s'il n'y en a pas).
 - Sans position GPS, rien n'est envoyé.
-- La LED jaune clignote à 1 Hz quand le GPS a une position, et s'éteint s'il n'y a pas de trame RMC valide depuis 5 s.
+- La LED jaune clignote rapidement (4 Hz, `FIX_BLINK_MS`) quand le GPS a une position, et s'éteint s'il n'y a pas de trame RMC valide depuis 5 s.
+- La LED rouge clignote trois fois rapidement (`SENT_BLINKS`) à chaque message accepté par le serveur (réponse HTTP 2xx).
 - `main.py` lance le script dans un thread, donc le REPL reste accessible. Le script redémarre 10 s après un plantage, et attend le réseau sans limite de temps au démarrage.
-- Consommation : environ 0,5 Mo par jour.
+- Consommation : environ 2 à 3 Mo par jour (en-têtes HTTP compris).
+- Le serveur distingue les deux lignes par leur nombre de champs : 5 pour la ligne courte, 11 pour la ligne complète.
 
 Pour désactiver le lancement au démarrage, supprimer ou renommer `/usr/main.py`.
 

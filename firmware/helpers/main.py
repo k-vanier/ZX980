@@ -4,6 +4,9 @@ import _thread
 import utime
 from usr import gps_post
 
+if not hasattr(gps_post, 'run'):
+	raise ImportError('/usr/gps_post.py is an old version without run(): copy the latest one')
+
 
 def worker():
 	while True:

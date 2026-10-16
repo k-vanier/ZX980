@@ -12,6 +12,7 @@
 #   zx980_python="/usr/local/bin/python3.12"
 #   zx980_script="/usr/local/libexec/zx980_server.py"
 #   zx980_dbdir="/var/db/zx980"
+#   zx980_authfile="/usr/local/etc/zx980.users"       accès au tableau de bord ("" = sans mot de passe)
 #   zx980_args="--api-port 8080 --web-port 8090"
 
 . /etc/rc.subr
@@ -27,7 +28,10 @@ load_rc_config $name
 : ${zx980_script:="/usr/local/libexec/zx980_server.py"}
 : ${zx980_dbdir:="/var/db/zx980"}
 : ${zx980_logfile:="/var/log/zx980.log"}
+: ${zx980_authfile="/usr/local/etc/zx980.users"}
 : ${zx980_args:=""}
+
+[ -n "${zx980_authfile}" ] && zx980_args="--auth-file ${zx980_authfile} ${zx980_args}"
 
 piddir="/var/run/${name}"
 pidfile="${piddir}/${name}.pid"
@@ -45,6 +49,12 @@ zx980_prestart()
 	install -d -o ${zx980_runas} -m 755 ${piddir}
 	touch ${zx980_logfile}
 	chown ${zx980_runas} ${zx980_logfile}
+	if [ -f "${zx980_authfile}" ]; then
+		chown root:${zx980_runas} ${zx980_authfile}
+		chmod 640 ${zx980_authfile}
+	elif [ -n "${zx980_authfile}" ]; then
+		warn "${zx980_authfile} absent : tableau de bord verrouillé, créer un accès avec : ${zx980_python} ${zx980_script} --auth-file ${zx980_authfile} --add-user NOM"
+	fi
 }
 
 run_rc_command "$1"

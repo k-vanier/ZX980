@@ -9,7 +9,7 @@ Python 3 standard uniquement (pas de uvicorn, fastapi ni nginx).
 | Port | Rôle | Exposition |
 |------|------|------------|
 | 8080 | `POST /message` `{"texte": "..."}` envoyé par le traceur | redirigé sur la box (internet) |
-| 8090 | tableau de bord web + API JSON | réseau local uniquement |
+| 8090 | tableau de bord web + API JSON, protégé par identifiant / mot de passe | réseau local uniquement |
 
 Deux formats de ligne sont reconnus :
 
@@ -29,9 +29,26 @@ pkg install python312 py312-sqlite3
 install -m 555 zx980_server.py /usr/local/libexec/zx980_server.py
 install -m 555 zx980.rc /usr/local/etc/rc.d/zx980
 sysrc zx980_enable=YES
+python3.12 /usr/local/libexec/zx980_server.py --auth-file /usr/local/etc/zx980.users --add-user admin
 service zx980 start
 tail -f /var/log/zx980.log
 ```
+
+## Accès au tableau de bord
+
+Le tableau de bord (page, `/api/state`, export CSV) demande un identifiant et un mot de passe (authentification HTTP Basic). Le port 8080 du traceur n'est pas concerné.
+
+- Les accès sont dans `/usr/local/etc/zx980.users`, une ligne `nom:hash` par utilisateur (PBKDF2-SHA256, jamais le mot de passe en clair).
+- Ajouter un accès ou changer un mot de passe (8 caractères minimum) :
+  ```sh
+  python3.12 /usr/local/libexec/zx980_server.py --auth-file /usr/local/etc/zx980.users --add-user NOM
+  ```
+  Le serveur relit le fichier à chaque changement, pas besoin de redémarrer. Pour le **premier** accès, faire `service zx980 restart` : le démarrage donne le fichier au groupe `www` en lecture (640).
+- Retirer un accès : supprimer sa ligne du fichier.
+- Si le fichier est absent, le tableau de bord est verrouillé (tout est refusé).
+- `sysrc zx980_authfile=""` désactive le mot de passe.
+
+Le mot de passe passe en clair (base64) sur le réseau local, car le serveur est en HTTP. Ne pas ouvrir le port 8090 sur internet.
 
 ## Configuration (`sysrc`)
 
@@ -42,6 +59,7 @@ tail -f /var/log/zx980.log
 | `zx980_script` | `/usr/local/libexec/zx980_server.py` |
 | `zx980_dbdir` | `/var/db/zx980` |
 | `zx980_logfile` | `/var/log/zx980.log` |
+| `zx980_authfile` | `/usr/local/etc/zx980.users` (`""` = sans mot de passe) |
 | `zx980_args` | (vide), ex. `--api-port 8080 --web-port 8090 -v` |
 
 Ne pas utiliser `zx980_user` : rc.subr lancerait alors `daemon(8)` lui-même sous cet utilisateur, qui ne peut plus écrire ses fichiers pid.

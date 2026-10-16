@@ -11,10 +11,16 @@ Two kinds of lines are sent by helpers/gps_post.py:
   full  (every 60 s): date,battery,fix,lon,lat,alt,speed,ip,operator,network,phone,
 """
 import argparse
+import base64
+import getpass
+import hashlib
+import hmac
 import json
 import logging
 import math
+import os
 import re
+import secrets
 import sqlite3
 import threading
 from datetime import datetime, timedelta
@@ -208,12 +214,119 @@ class ReceiverHandler(BaseHTTPRequestHandler):
 		self.reply(404, {'error': 'not found'})
 
 
+PBKDF2_ROUNDS = 200000
+
+
+def hash_password(password):
+	salt = secrets.token_bytes(16)
+	digest = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, PBKDF2_ROUNDS)
+	return 'pbkdf2_sha256$%d$%s$%s' % (PBKDF2_ROUNDS, salt.hex(), digest.hex())
+
+
+def check_password(password, stored):
+	try:
+		algo, rounds, salt, digest = stored.split('$')
+		if algo != 'pbkdf2_sha256':
+			return False
+		test = hashlib.pbkdf2_hmac('sha256', password.encode(), bytes.fromhex(salt), int(rounds))
+	except ValueError:
+		return False
+	return hmac.compare_digest(test.hex(), digest)
+
+
+class Users:
+	"""user:hash file, one per line; re-read when it changes so adding a user needs no restart.
+	A missing or empty file locks the dashboard (fail closed)."""
+
+	def __init__(self, path):
+		self.path = path
+		self.mtime = None
+		self.users = {}
+		self.ok_cache = set()  # sha256(user, password) already checked, PBKDF2 is slow on every 5 s refresh
+		self.lock = threading.Lock()
+
+	def load(self):
+		try:
+			mtime = os.stat(self.path).st_mtime
+		except OSError:
+			if self.mtime is not False:
+				log.error("Fichier d'accès %s introuvable : tableau de bord verrouillé "
+					'(créer un accès avec --add-user)', self.path)
+			self.mtime, self.users = False, {}
+			self.ok_cache.clear()
+			return
+		if mtime == self.mtime:
+			return
+		users = {}
+		with open(self.path, encoding='utf-8') as fh:
+			for line in fh:
+				line = line.strip()
+				if line and not line.startswith('#') and ':' in line:
+					name, stored = line.split(':', 1)
+					users[name] = stored
+		self.mtime, self.users = mtime, users
+		self.ok_cache.clear()
+		log.info("Fichier d'accès %s : %d utilisateur(s)", self.path, len(users))
+
+	def check(self, header):
+		if not header or not header.startswith('Basic '):
+			return None
+		try:
+			name, password = base64.b64decode(header[6:]).decode('utf-8').split(':', 1)
+		except (ValueError, UnicodeDecodeError):
+			return None
+		with self.lock:
+			self.load()
+			key = hashlib.sha256((name + ':' + password).encode()).digest()
+			if key in self.ok_cache:
+				return name
+			stored = self.users.get(name)
+			if stored and check_password(password, stored):
+				self.ok_cache.add(key)
+				return name
+		return None
+
+
+def add_user(path, name):
+	if not name or ':' in name:
+		raise SystemExit("Nom d'utilisateur invalide")
+	password = getpass.getpass('Mot de passe pour %s : ' % name)
+	if len(password) < 8:
+		raise SystemExit('Mot de passe trop court (8 caractères minimum)')
+	if password != getpass.getpass('Confirmer : '):
+		raise SystemExit('Les mots de passe ne correspondent pas')
+	lines = []
+	if os.path.exists(path):
+		with open(path, encoding='utf-8') as fh:
+			lines = [l for l in fh.read().splitlines() if not l.startswith(name + ':')]
+	lines.append('%s:%s' % (name, hash_password(password)))
+	fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+	with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+		fh.write('\n'.join(lines) + '\n')
+	print('Accès %s enregistré dans %s' % (name, path))
+
+
 class WebHandler(BaseHTTPRequestHandler):
 	"""Local network side: dashboard + JSON API"""
 	store = None
+	users = None  # Users, or None = no access control
 
 	def log_message(self, fmt, *args):
 		log.debug('web %s - %s', self.client_address[0], fmt % args)
+
+	def authorized(self):
+		if self.users is None or self.users.check(self.headers.get('Authorization')):
+			return True
+		if self.headers.get('Authorization'):  # browsers always try once without credentials first
+			log.warning('Mauvais identifiant ou mot de passe depuis %s', self.client_address[0])
+		body = 'Accès protégé'.encode()
+		self.send_response(401)
+		self.send_header('WWW-Authenticate', 'Basic realm="ZX980 Tracker", charset="UTF-8"')
+		self.send_header('Content-Type', 'text/plain; charset=utf-8')
+		self.send_header('Content-Length', str(len(body)))
+		self.end_headers()
+		self.wfile.write(body)
+		return False
 
 	def send(self, code, ctype, body):
 		self.send_response(code)
@@ -224,6 +337,8 @@ class WebHandler(BaseHTTPRequestHandler):
 		self.wfile.write(body)
 
 	def do_GET(self):
+		if not self.authorized():
+			return
 		url = urlparse(self.path)
 		if url.path == '/':
 			return self.send(200, 'text/html; charset=utf-8', PAGE.encode())
@@ -430,14 +545,26 @@ def main():
 	ap.add_argument('--api-port', type=int, default=8080, help='POST /message (ouvert sur internet)')
 	ap.add_argument('--web-host', default='0.0.0.0')
 	ap.add_argument('--web-port', type=int, default=8090, help='tableau de bord (réseau local)')
+	ap.add_argument('--auth-file', help="fichier d'accès au tableau de bord (absent = pas de mot de passe)")
+	ap.add_argument('--add-user', metavar='NOM', help="crée ou change l'accès NOM dans --auth-file, puis quitte")
 	ap.add_argument('-v', '--verbose', action='store_true')
 	args = ap.parse_args()
+
+	if args.add_user:
+		if not args.auth_file:
+			ap.error('--add-user demande --auth-file')
+		return add_user(args.auth_file, args.add_user)
 
 	logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
 		format='%(asctime)s %(levelname)s %(message)s')
 	store = Store(args.db)
 	ReceiverHandler.store = store
 	WebHandler.store = store
+	if args.auth_file:
+		WebHandler.users = Users(args.auth_file)
+		WebHandler.users.load()
+	else:
+		log.warning("Tableau de bord sans mot de passe (pas de --auth-file)")
 	serve('Récepteur', args.api_host, args.api_port, ReceiverHandler)
 	serve('Tableau de bord', args.web_host, args.web_port, WebHandler)
 	try:

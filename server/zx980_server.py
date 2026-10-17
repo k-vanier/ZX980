@@ -588,6 +588,8 @@ tr.seg td { background:color-mix(in srgb, var(--line) 45%, var(--card)); white-s
 tr.seg:hover td { background:var(--line); }
 tr.seg .fold { display:inline-block; width:16px; color:var(--muted); }
 tr.seg .facts { color:var(--muted); margin:0 6px; }
+tr.seg.hl td { box-shadow:inset 4px 0 #f97316; }
+tr.seg.hl .pill::after { content:" · sur la carte"; font-weight:400; }
 .pill { display:inline-block; font-size:11px; font-weight:700; padding:1px 8px; border-radius:99px; margin-right:8px; color:#fff; }
 .pill.move { background:var(--accent); }
 .pill.stop { background:var(--muted); }
@@ -767,6 +769,8 @@ async function refresh() {
   last = s;
   $('purge').disabled = !s.count;
   await loadOpenSegments(s.groups);
+  // keep the highlighted segment up to date (the current one grows), drop it when it leaves the period
+  if (highlighted != null) highlight(opened.has(highlighted) && s.groups.some(g => g.first_id === highlighted) ? highlighted : null, false);
   renderRows();
 }
 
@@ -814,7 +818,7 @@ function segHtml(g) {
   if (g.battery != null) facts.push('batt. ' + g.battery + ' %');
   const marks = ['sos', 'manual', 'other'].map(k => [k, g.specials.filter(r => r.kind === k).length]).filter(([, n]) => n)
     .map(([k, n]) => `<span class="tag ${k}">${n > 1 ? n + ' × ' : ''}${k === 'other' ? 'brut' : k}</span>`).join(' ');
-  let html = `<tr class="seg ${g.type}${open ? ' open' : ''}" data-first="${g.first_id}"><td colspan="13">
+  let html = `<tr class="seg ${g.type}${open ? ' open' : ''}${highlighted === g.first_id ? ' hl' : ''}" data-first="${g.first_id}"><td colspan="13">
     <span class="fold">${open ? '▾' : '▸'}</span><span class="pill ${g.type}">${g.type === 'move' ? 'Trajet' : 'Arrêt'}</span>
     <b>${esc(d0)} → ${esc(end)}</b> <span class="facts">${facts.join(' · ')}</span> ${marks}</td></tr>`;
   const det = open && details[g.first_id];
@@ -836,13 +840,47 @@ function renderRows() {
     : last.recent.map(r => rowHtml(r)).join('');
 }
 
+// The last unfolded segment is drawn on the map: thick orange line for a trip, orange ring for a stop
+const HL = '#f97316';
+const hlLine = L.polyline([], {color: HL, weight: 7, opacity: .9});
+const hlStop = L.circleMarker([0, 0], {radius: 16, color: HL, weight: 4, fill: false});
+let highlighted = null;
+
+function highlight(id, fit) {
+  highlighted = id;
+  const g = id != null && last && last.groups ? last.groups.find(x => x.first_id === id) : null;
+  const pts = g && details[id] ? details[id].rows.filter(r => r.lat != null && !(r.lat === 0 && r.lon === 0))
+    .map(r => [r.lat, r.lon]).reverse() : [];
+  hlLine.remove(); hlStop.remove();
+  if (!pts.length) return;
+  if (g.type === 'move') {
+    hlLine.setLatLngs(pts).addTo(map);
+    if (fit) map.fitBounds(hlLine.getBounds(), {padding: [40, 40], maxZoom: 17});
+  } else {
+    const c = [pts.reduce((a, p) => a + p[0], 0) / pts.length, pts.reduce((a, p) => a + p[1], 0) / pts.length];
+    hlStop.setLatLng(c).addTo(map);
+    if (fit) map.setView(c, Math.max(map.getZoom(), 16));
+  }
+  // on a phone the map is above the table: bring it back into view
+  if (fit && map.getContainer().getBoundingClientRect().bottom < 60) map.getContainer().scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
 $('rows').addEventListener('click', async e => {
   const tr = e.target.closest('tr.seg');
   if (!tr || e.target.closest('a')) return;
   const id = +tr.dataset.first;
-  if (opened.has(id)) opened.delete(id); else opened.add(id);
+  if (opened.has(id)) {
+    opened.delete(id);
+    if (highlighted === id) highlight(null);
+    renderRows();
+    return;
+  }
+  opened.add(id);
+  highlighted = id;
   renderRows();
-  if (opened.has(id)) { await loadOpenSegments(last.groups); renderRows(); }
+  await loadOpenSegments(last.groups);
+  highlight(id, true);
+  renderRows();
 });
 // default range: today from midnight to now
 const now = new Date();

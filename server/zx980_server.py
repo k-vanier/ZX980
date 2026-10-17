@@ -552,7 +552,7 @@ const satCell = s => {
 };
 
 const map = L.map('map').setView([46.6, 2.4], 6);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '&copy; OpenStreetMap'}).addTo(map);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '&copy; OpenStreetMap'}).addTo(map);
 const line = L.polyline([], {color: '#2563eb', weight: 3}).addTo(map);
 const marker = L.circleMarker([0, 0], {radius: 8, color: '#fff', weight: 2, fillColor: '#dc2626', fillOpacity: 1});
 const startMarker = L.circleMarker([0, 0], {radius: 7, color: '#fff', weight: 2, fillColor: '#16a34a', fillOpacity: 1});

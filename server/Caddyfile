@@ -16,7 +16,8 @@ tracker.example.com {
 		# browsers will refuse plain HTTP for this domain for one year
 		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options nosniff
-		Referrer-Policy no-referrer
+		# keep the default referrer: tile.openstreetmap.org blocks map tiles requested without one
+		Referrer-Policy strict-origin-when-cross-origin
 		-Server
 	}
 }

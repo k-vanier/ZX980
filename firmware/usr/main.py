@@ -1,7 +1,14 @@
 # /usr/main.py is executed by QuecPython at boot.
 # Needs /usr/gps_post.py, /usr/post_message.py and /usr/config.json.
+import sys
 import _thread
 import utime
+
+# A module whose import failed stays half-loaded in sys.modules: drop it so that
+# running main.py again shows the real error instead of a module without run().
+for name in ('usr.gps_post', 'usr.post_message'):
+	sys.modules.pop(name, None)
+
 from usr import gps_post
 from usr.post_message import load_config
 

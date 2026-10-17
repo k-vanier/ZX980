@@ -8,7 +8,8 @@ Standard library only (no uvicorn/fastapi needed), replaces api.py.
 
 Two kinds of lines are sent by ZX980/usr/gps_post.py:
   short (every 10 s): date,lon,lat,alt,speed,
-  full  (every 60 s): date,battery,fix,lon,lat,alt,speed,ip,operator,network,phone,
+  full  (every 60 s): date,battery,fix,lon,lat,alt,speed,ip,operator,network,phone,satellites,
+  (older firmware: same full line without satellites, 11 fields)
 """
 import argparse
 import base64
@@ -49,13 +50,14 @@ CREATE TABLE IF NOT EXISTS messages (
 	ip TEXT,
 	operator TEXT,
 	network TEXT,
-	phone TEXT
+	phone TEXT,
+	satellites TEXT
 );
 CREATE INDEX IF NOT EXISTS messages_received ON messages(received);
 '''
 
 FIELDS = ('kind', 'device_time', 'lat', 'lon', 'alt', 'speed', 'battery', 'fix',
-	'ip', 'operator', 'network', 'phone')
+	'ip', 'operator', 'network', 'phone', 'satellites')
 
 
 def dms_to_deg(text):
@@ -89,8 +91,10 @@ def parse_line(texte):
 	if len(parts) == 5:
 		out['kind'] = 'gps'
 		gps = parts[1:5]
-	elif len(parts) == 11:
+	elif len(parts) in (11, 12):
 		out['kind'] = 'full'
+		if len(parts) == 12:
+			out['satellites'] = parts[11]  # '7/12(GP8+BD4)': used / in view (per constellation)
 		# '100%' or '100%(4165mV)': the voltage stays available in the raw column
 		m = re.match(r'(\d+)%', parts[1])
 		out['battery'] = int(m.group(1)) if m else None
@@ -113,6 +117,11 @@ class Store:
 		self.db = sqlite3.connect(path, check_same_thread=False)
 		self.db.row_factory = sqlite3.Row
 		self.db.executescript(SCHEMA)
+		# databases created before the satellites column existed
+		cols = [r['name'] for r in self.db.execute('PRAGMA table_info(messages)')]
+		if 'satellites' not in cols:
+			self.db.execute('ALTER TABLE messages ADD COLUMN satellites TEXT')
+			self.db.commit()
 
 	def add(self, source, texte):
 		row = parse_line(texte)
@@ -497,7 +506,7 @@ async function refresh() {
     const b = d.battery ?? 0, col = b > 50 ? 'var(--ok)' : b > 20 ? 'var(--warn)' : 'var(--bad)';
     dl($('dev'), [
       ['Batterie', `${b} %<div class="bar"><div style="width:${b}%;background:${col}"></div></div>`],
-      ['Fix GPS', esc(d.fix)], ['Réseau', esc(d.network)], ['Opérateur', esc(d.operator)],
+      ['Fix GPS', esc(d.fix)], ['Satellites', esc(d.satellites ?? '')], ['Réseau', esc(d.network)], ['Opérateur', esc(d.operator)],
       ['IP', esc(d.ip)], ['Téléphone', esc(d.phone)], ['Dernier état', esc(tl(d.received))]]);
   }
   line.setLatLngs(s.track);

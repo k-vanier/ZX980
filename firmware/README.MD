@@ -27,11 +27,11 @@ datefrance,posX,posY,altitude,vitesse,
 16/10/2026 19:40:39,0°13'36.0"E,49°08'48.0"N,45.2m,0.0km/h,
 ```
 
-**Ligne complète (toutes les 60 s, à la place de la ligne courte), 11 champs :**
+**Ligne complète (toutes les 60 s, à la place de la ligne courte), 12 champs :**
 
 ```
-datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vitesse,IP,operator,signal,telephone,
-16/10/2026 19:40:39,100%(4165mV),3D,0°13'36.0"E,49°08'48.0"N,45.2m,0.0km/h,10.126.248.157,Free,4G -78dBm,+33600000000,
+datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vitesse,IP,operator,signal,telephone,satellites,
+16/10/2026 19:40:39,100%(4165mV),3D,0°13'36.0"E,49°08'48.0"N,45.2m,0.0km/h,10.126.248.157,Free,4G -78dBm,+33600000000,7/12(BD4+GP8),
 ```
 
 | Champ | Source | Détail |
@@ -46,8 +46,9 @@ datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vitesse,IP,operator,signal,tel
 | `operator` | `net.operatorName()` | Nom de l'opérateur |
 | `signal` | `net.getNetMode()`, `net.getSignal()` | Technologie (`4G`/`3G`/`2G`) et RSSI en dBm |
 | `telephone` | `sim.getPhoneNumber()` | Numéro enregistré sur la carte SIM |
+| `satellites` | GPS (GGA, GSV) | `utilisés/vus(détail)`. Exemple : `7/12(BD4+GP8)` = 7 satellites utilisés pour la position, 12 visibles, dont 4 BeiDou (`BD`) et 8 GPS (`GP`). `GL` = GLONASS, `GA` = Galileo |
 
-Rien n'est envoyé tant que le GPS n'a pas de position. Consommation : environ 2 à 3 Mo par jour.
+Rien n'est envoyé tant que le GPS n'a pas de position. Consommation : environ 10 Mo par jour, soit 300 à 350 Mo par mois en continu. Chaque message coûte environ 1,1 Ko, car il inclut une recherche DNS et une connexion TCP complète, alors que la ligne CSV ne fait qu'environ 75 octets.
 
 ### LEDs
 

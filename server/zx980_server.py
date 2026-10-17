@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS messages (
 	alt REAL,
 	speed REAL,
 	battery INTEGER,
+	battery_mv INTEGER,
 	fix TEXT,
 	ip TEXT,
 	operator TEXT,
@@ -56,7 +57,7 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS messages_received ON messages(received);
 '''
 
-FIELDS = ('kind', 'device_time', 'lat', 'lon', 'alt', 'speed', 'battery', 'fix',
+FIELDS = ('kind', 'device_time', 'lat', 'lon', 'alt', 'speed', 'battery', 'battery_mv', 'fix',
 	'ip', 'operator', 'network', 'phone', 'satellites')
 
 
@@ -95,9 +96,10 @@ def parse_line(texte):
 		out['kind'] = 'full'
 		if len(parts) == 12:
 			out['satellites'] = parts[11]  # '7/12(GP8+BD4)': used / in view (per constellation)
-		# '100%' or '100%(4165mV)': the voltage stays available in the raw column
-		m = re.match(r'(\d+)%', parts[1])
+		# '100%' or '100%(4165mV)'
+		m = re.match(r'(\d+)%(?:\((\d+)mV\))?', parts[1])
 		out['battery'] = int(m.group(1)) if m else None
+		out['battery_mv'] = int(m.group(2)) if m and m.group(2) else None
 		out['fix'] = parts[2]
 		gps = parts[3:7]
 		out['ip'], out['operator'], out['network'], out['phone'] = parts[7:11]
@@ -117,11 +119,20 @@ class Store:
 		self.db = sqlite3.connect(path, check_same_thread=False)
 		self.db.row_factory = sqlite3.Row
 		self.db.executescript(SCHEMA)
-		# databases created before the satellites column existed
+		# databases created before these columns existed: add them and fill them from the raw lines
 		cols = [r['name'] for r in self.db.execute('PRAGMA table_info(messages)')]
-		if 'satellites' not in cols:
-			self.db.execute('ALTER TABLE messages ADD COLUMN satellites TEXT')
+		missing = [(c, t) for c, t in (('satellites', 'TEXT'), ('battery_mv', 'INTEGER')) if c not in cols]
+		for col, sqltype in missing:
+			self.db.execute('ALTER TABLE messages ADD COLUMN %s %s' % (col, sqltype))
+		if missing:
+			names = [c for c, _ in missing]
+			rows = self.db.execute("SELECT id, raw FROM messages WHERE kind='full'").fetchall()
+			for r in rows:
+				parsed = parse_line(r['raw'])
+				self.db.execute('UPDATE messages SET %s WHERE id=?' % ','.join(c + '=?' for c in names),
+					[parsed[c] for c in names] + [r['id']])
 			self.db.commit()
+			log.info('Base mise à jour : colonnes %s ajoutées (%d lignes complètes relues)', ', '.join(names), len(rows))
 
 	def add(self, source, texte):
 		row = parse_line(texte)
@@ -437,7 +448,7 @@ th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var
   <div class="card wide"><h2>Messages de la période (<span id="count">0</span>)</h2>
     <div class="scroll"><table><thead><tr>
       <th>Reçu</th><th>Type</th><th>Heure GPS</th><th>Lat</th><th>Lon</th><th>Alt</th><th>Vitesse</th>
-      <th>Batt.</th><th>Fix</th><th>Réseau</th><th>Opérateur</th><th>IP</th></tr></thead>
+      <th>Batt.</th><th>Fix</th><th title="utilisés / visibles · visibles par constellation">Satellites</th><th>Réseau</th><th>Opérateur</th><th>IP</th></tr></thead>
     <tbody id="rows"></tbody></table></div>
   </div>
 </main>
@@ -446,6 +457,21 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const f = (v, d, u='') => v == null ? '—' : Number(v).toFixed(d) + u;
 const t = s => s ? s.replace('T', ' ') : '—';
+const volts = (mv, sep = ' ') => mv == null ? '' : sep + (mv / 1000).toFixed(2) + ' V';
+
+// '13/18(BD7+GP11)' = 13 used in the fix / 18 in view, of which 7 BeiDou and 11 GPS
+const CONSTELLATIONS = {GP: 'GPS', BD: 'BeiDou', GL: 'GLONASS', GA: 'Galileo', GQ: 'QZSS'};
+function sats(s) {
+  const m = /^(\d+)\/(\d+)(?:\((.*)\))?$/.exec(s || '');
+  if (!m) return null;
+  const per = (m[3] || '').split('+').map(p => /^([A-Z]{2})(\d+)$/.exec(p)).filter(Boolean)
+    .map(([, c, n]) => [CONSTELLATIONS[c] || c, +n]);
+  return {used: +m[1], view: +m[2], per};
+}
+const satCell = s => {
+  const x = sats(s);
+  return x ? `${x.used}/${x.view}` + x.per.map(([name, n]) => ` · ${name} ${n}`).join('') : esc(s);
+};
 
 const map = L.map('map').setView([46.6, 2.4], 6);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '&copy; OpenStreetMap'}).addTo(map);
@@ -504,9 +530,13 @@ async function refresh() {
   if (!d) $('dev').innerHTML = none;
   else {
     const b = d.battery ?? 0, col = b > 50 ? 'var(--ok)' : b > 20 ? 'var(--warn)' : 'var(--bad)';
+    const sat = sats(d.satellites);
     dl($('dev'), [
-      ['Batterie', `${b} %<div class="bar"><div style="width:${b}%;background:${col}"></div></div>`],
-      ['Fix GPS', esc(d.fix)], ['Satellites', esc(d.satellites ?? '')], ['Réseau', esc(d.network)], ['Opérateur', esc(d.operator)],
+      ['Batterie', `${b} %${volts(d.battery_mv, ' · ')}<div class="bar"><div style="width:${b}%;background:${col}"></div></div>`],
+      ['Fix GPS', esc(d.fix)],
+      ['Satellites', sat ? `${sat.used} utilisés / ${sat.view} visibles` : '—'],
+      ...(sat ? sat.per.map(([name, n]) => ['· ' + name, `${n} visibles`]) : []),
+      ['Réseau', esc(d.network)], ['Opérateur', esc(d.operator)],
       ['IP', esc(d.ip)], ['Téléphone', esc(d.phone)], ['Dernier état', esc(tl(d.received))]]);
   }
   line.setLatLngs(s.track);
@@ -522,10 +552,11 @@ async function refresh() {
     ['Distance', f(st.km, 2, ' km')], ['Vitesse max', f(st.max_speed, 1, ' km/h')]]);
   $('count').textContent = s.count;
   $('rows').innerHTML = s.recent.map(r => r.kind === 'other'
-    ? `<tr><td>${esc(tl(r.received))}</td><td><span class="tag">brut</span></td><td colspan="10">${esc(r.raw)}</td></tr>`
+    ? `<tr><td>${esc(tl(r.received))}</td><td><span class="tag">brut</span></td><td colspan="11">${esc(r.raw)}</td></tr>`
     : `<tr><td>${esc(tl(r.received))}</td><td><span class="tag ${r.kind}">${r.kind}</span></td><td>${esc(t(r.device_time))}</td>
       <td>${f(r.lat, 6)}</td><td>${f(r.lon, 6)}</td><td>${f(r.alt, 1, ' m')}</td><td>${f(r.speed, 1, ' km/h')}</td>
-      <td>${r.battery == null ? '' : r.battery + ' %'}</td><td>${esc(r.fix)}</td><td>${esc(r.network)}</td><td>${esc(r.operator)}</td><td>${esc(r.ip)}</td></tr>`).join('');
+      <td>${r.battery == null ? '' : r.battery + ' %' + volts(r.battery_mv, ' · ')}</td><td>${esc(r.fix)}</td>
+      <td>${r.satellites ? satCell(r.satellites) : ''}</td><td>${esc(r.network)}</td><td>${esc(r.operator)}</td><td>${esc(r.ip)}</td></tr>`).join('');
 }
 // default range: today from midnight to now
 const now = new Date();

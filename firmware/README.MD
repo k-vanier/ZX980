@@ -47,7 +47,7 @@ datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vitesse,IP,operator,signal,tel
 | `signal` | `net.getNetMode()`, `net.getSignal()` | Technologie (`4G`/`3G`/`2G`) et RSSI en dBm |
 | `telephone` | `sim.getPhoneNumber()` | Numéro enregistré sur la carte SIM |
 
-Rien n'est envoyé tant que le GPS n'a pas de position. Consommation : environ 2 à 3 Mo par jour.
+Rien n'est envoyé tant que le GPS n'a pas de position. Consommation : environ 10 Mo par jour, soit 300 à 350 Mo par mois en continu. Chaque message coûte environ 1,1 Ko, car il inclut une recherche DNS et une connexion TCP complète, alors que la ligne CSV ne fait qu'environ 75 octets.
 
 ### LEDs
 

@@ -583,7 +583,8 @@ th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var
 .scroll { max-height:min(420px, 70vh); overflow:auto; }
 .msghead { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; }
 .toggle { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:13px; cursor:pointer; }
-tr.seg { cursor:pointer; }
+tr.seg { cursor:pointer; user-select:none; }
+tr.seg:focus-visible td { outline:2px solid var(--accent); outline-offset:-2px; }
 tr.seg td { background:color-mix(in srgb, var(--line) 45%, var(--card)); white-space:normal; padding:8px; }
 tr.seg:hover td { background:var(--line); }
 tr.seg .fold { display:inline-block; width:16px; color:var(--muted); }
@@ -818,7 +819,7 @@ function segHtml(g) {
   if (g.battery != null) facts.push('batt. ' + g.battery + ' %');
   const marks = ['sos', 'manual', 'other'].map(k => [k, g.specials.filter(r => r.kind === k).length]).filter(([, n]) => n)
     .map(([k, n]) => `<span class="tag ${k}">${n > 1 ? n + ' × ' : ''}${k === 'other' ? 'brut' : k}</span>`).join(' ');
-  let html = `<tr class="seg ${g.type}${open ? ' open' : ''}${highlighted === g.first_id ? ' hl' : ''}" data-first="${g.first_id}"><td colspan="13">
+  let html = `<tr class="seg ${g.type}${open ? ' open' : ''}${highlighted === g.first_id ? ' hl' : ''}" data-first="${g.first_id}" tabindex="0" aria-expanded="${open}"><td colspan="13">
     <span class="fold">${open ? '▾' : '▸'}</span><span class="pill ${g.type}">${g.type === 'move' ? 'Trajet' : 'Arrêt'}</span>
     <b>${esc(d0)} → ${esc(end)}</b> <span class="facts">${facts.join(' · ')}</span> ${marks}</td></tr>`;
   const det = open && details[g.first_id];
@@ -833,11 +834,14 @@ function segHtml(g) {
   return html;
 }
 
+let rowsHtml = '';
 function renderRows() {
   if (!last) return;
-  $('rows').innerHTML = grouped() && last.groups
+  const html = grouped() && last.groups
     ? last.groups.slice().reverse().map(segHtml).join('')
     : last.recent.map(r => rowHtml(r)).join('');
+  // replacing identical rows would only break a click in progress (see the pointer handlers below)
+  if (html !== rowsHtml) $('rows').innerHTML = rowsHtml = html;
 }
 
 // The last unfolded segment is drawn on the map: thick orange line for a trip, orange ring for a stop
@@ -865,10 +869,28 @@ function highlight(id, fit) {
   if (fit && map.getContainer().getBoundingClientRect().bottom < 60) map.getContainer().scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
-$('rows').addEventListener('click', async e => {
+// The table is redrawn at each refresh (every few seconds with a 3 s send interval). A "click" event is
+// lost when the row under the mouse is replaced between press and release, so the press and the
+// release are matched by segment id instead: a redraw in between no longer matters.
+let press = null;
+$('rows').addEventListener('pointerdown', e => {
   const tr = e.target.closest('tr.seg');
-  if (!tr || e.target.closest('a')) return;
-  const id = +tr.dataset.first;
+  press = tr && e.button === 0 && !e.target.closest('a') ? {id: +tr.dataset.first, x: e.clientX, y: e.clientY} : null;
+});
+$('rows').addEventListener('pointercancel', () => { press = null; });  // touch scroll
+$('rows').addEventListener('pointerup', e => {
+  const p = press;
+  press = null;
+  const tr = p && e.target.closest('tr.seg');
+  // same segment, and not a drag or a finger scrolling the table
+  if (tr && +tr.dataset.first === p.id && Math.hypot(e.clientX - p.x, e.clientY - p.y) < 10) toggleSegment(p.id);
+});
+$('rows').addEventListener('keydown', e => {
+  const tr = e.target.closest('tr.seg');
+  if (tr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleSegment(+tr.dataset.first); }
+});
+
+async function toggleSegment(id) {
   if (opened.has(id)) {
     opened.delete(id);
     if (highlighted === id) highlight(null);
@@ -881,7 +903,7 @@ $('rows').addEventListener('click', async e => {
   await loadOpenSegments(last.groups);
   highlight(id, true);
   renderRows();
-});
+}
 // default range: today from midnight to now
 const now = new Date();
 $('from').value = local(new Date(now.getFullYear(), now.getMonth(), now.getDate()));

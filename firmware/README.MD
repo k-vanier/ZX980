@@ -24,14 +24,14 @@ Request `POST http://<server_host>:<server_port><server_path>` (set in [`usr/con
 
 ```
 datefrance,posX,posY,altitude,vitesse,
-16/10/2026 19:40:39,0°13'36.0"E,49°08'48.0"N,45.2m,0.0km/h,
+16/10/2026 19:40:39,0°13'36.00"E,49°08'48.00"N,45.2m,0.0km/h,
 ```
 
 **Full line (every 60 s, instead of the short line), 12 fields:**
 
 ```
 datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vitesse,IP,operator,signal,telephone,satellites,
-16/10/2026 19:40:39,100%(4165mV),3D,0°13'36.0"E,49°08'48.0"N,45.2m,0.0km/h,10.126.248.157,Free,4G -78dBm,+33600000000,7/12(BD4+GP8),
+16/10/2026 19:40:39,100%(4165mV),3D,0°13'36.00"E,49°08'48.00"N,45.2m,0.0km/h,10.126.248.157,Free,4G -78dBm,+33600000000,7/12(BD4+GP8),
 ```
 
 | Field | Source | Details |
@@ -39,7 +39,7 @@ datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vitesse,IP,operator,signal,tel
 | `datefrance` | GPS (RMC) | UTC time converted to Paris time, including the summer/winter time change |
 | `niveaubat` | `Power.getVbatt()` | Percentage computed from the voltage, followed by the measured voltage: `100%(4165mV)`. Average of 5 readings. About 100 % while USB is plugged in |
 | `fix2Dou3D` | GPS (GSA) | `2D`, `3D`, or `?` if unknown |
-| `posX` / `posY` | GPS (RMC) | Longitude then latitude, in degrees, minutes and seconds |
+| `posX` / `posY` | GPS (RMC) | Longitude then latitude, in degrees, minutes and seconds, to 0.01" (about 30 cm) |
 | `altitude` | GPS (GGA) | In metres |
 | `vitesse` | GPS (RMC) | Speed in km/h |
 | `IP` | `dataCall.getInfo()` | Mobile IP address (private, behind Free's CGNAT) |
@@ -48,7 +48,7 @@ datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vitesse,IP,operator,signal,tel
 | `telephone` | `sim.getPhoneNumber()` | Number stored on the SIM card |
 | `satellites` | GPS (GGA, GSV) | `used/in view(details)`. Example: `7/12(BD4+GP8)` = 7 satellites used for the fix, 12 in view, of which 4 BeiDou (`BD`) and 8 GPS (`GP`). `GL` = GLONASS, `GA` = Galileo |
 
-Nothing is sent until the GPS has a position. Data usage: about 10 MB per day, i.e. 300 to 350 MB per month when running continuously. Each message costs about 1.1 KB, because it includes a DNS lookup and a full TCP connection, whereas the CSV line itself is only about 75 bytes.
+Nothing is sent until the GPS has a **precise** position: 3D fix, HDOP ≤ 2.5 and at least 6 satellites used (`MIN_FIX_TYPE`, `MAX_HDOP`, `MIN_SATS_USED`). Otherwise the REPL prints `Imprecise position (HDOP 3.1 > 2.5), nothing sent`. Indoors or with the antenna badly placed, the tracker can therefore stay silent: relax these thresholds if needed. Data usage: about 10 MB per day, i.e. 300 to 350 MB per month when running continuously. Each message costs about 1.1 KB, because it includes a DNS lookup and a full TCP connection, whereas the CSV line itself is only about 75 bytes.
 
 ### LEDs
 
@@ -92,6 +92,10 @@ Copy the whole folder to `/usr` on the module.
 | `SENT_BLINKS` | `3` | Number of red flashes per message sent |
 | `FIX_BLINK_MS` | `125` | Yellow LED blink speed |
 | `FIX_TIMEOUT_MS` | `5000` | Time without a valid RMC sentence after which the position is considered lost |
+| `MIN_FIX_TYPE` | `3` | Minimum fix type to send a position (`3` = 3D only, `2` = also 2D) |
+| `MAX_HDOP` | `2.5` | Maximum HDOP (horizontal dilution of precision) to send a position |
+| `MIN_SATS_USED` | `6` | Minimum number of satellites used in the fix |
+| `GNSS_MODE` | `7` | Constellations sent to the GPS chip with `$PCAS04`: 1 GPS, 2 BeiDou, 4 GLONASS, added together (7 = all three) |
 | `LOW_BATTERY_MV` | `3500` | Low battery shutdown threshold (mV) |
 | `LOW_BATTERY_CHECKS` | `3` | Number of consecutive low readings before shutdown |
 | `BATTERY_CHECK_MS` | `30000` | Interval between two battery checks |
@@ -133,7 +137,7 @@ To disable the automatic start, delete or rename `/usr/main.py`.
 |---|---|
 | Module | Quectel EC800M-CNLE (LTE Cat 1) |
 | Firmware | `QPY_OCPU_V0005_EC800M_CNLE_FW`: QuecPython V0005, MicroPython 1.13, about 950 KB of free RAM, about 540 KB free in `/usr` |
-| GPS | AT6558R (CASIC), GPS + BeiDou, UART2 at 9600 baud ([datasheet](docs/at6558.pdf)) |
+| GPS | AT6558R (CASIC), GPS + BeiDou + GLONASS (set at each power-on), UART2 at 9600 baud ([datasheet](docs/at6558.pdf)) |
 | GPS antenna | Passive ceramic. The chip always reports `ANTENNA OPEN`, which is normal. |
 | Battery | 1S LiPo with JST connector |
 | Tested operator | Free Mobile, APN `free` |

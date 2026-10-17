@@ -148,6 +148,18 @@ class Store:
 		with self.lock:
 			return [dict(r) for r in self.db.execute(sql, args)]
 
+	def purge(self, start=None, end=None):
+		"""Delete the messages received between start and end (ISO strings), or all of them.
+		VACUUM rewrites the file so the deleted positions do not stay in free pages."""
+		with self.lock:
+			if start is None:
+				n = self.db.execute('DELETE FROM messages').rowcount
+			else:
+				n = self.db.execute('DELETE FROM messages WHERE received BETWEEN ? AND ?', (start, end)).rowcount
+			self.db.commit()
+			self.db.execute('VACUUM')
+		return n
+
 	def state(self, start, end, limit):
 		"""Everything computed on messages received between start and end (ISO strings),
 		except last_seen (latest message overall, for the online badge)"""
@@ -383,6 +395,34 @@ class WebHandler(BaseHTTPRequestHandler):
 			return self.send(200, 'text/csv; charset=utf-8', body)
 		self.send(404, 'text/plain', b'not found')
 
+	def do_POST(self):
+		"""POST /api/purge?from=...&to=... (or ?hours=N) deletes that period, ?all=1 deletes everything"""
+		if not self.authorized():
+			return
+		url = urlparse(self.path)
+		if url.path != '/api/purge':
+			return self.send(404, 'text/plain', b'not found')
+		# the browser re-sends Basic credentials on its own, even for a form posted by another site:
+		# a custom header can only come from this page's fetch() (a cross-site one needs a CORS preflight)
+		if self.headers.get('X-ZX980') != 'purge':
+			log.warning('Purge refusée depuis %s : en-tête X-ZX980 absent', self.client_address[0])
+			return self.send(403, 'text/plain; charset=utf-8', 'requête refusée'.encode())
+		q = parse_qs(url.query)
+		try:
+			if q.get('all') == ['1']:
+				start = end = None
+				n = self.store.purge()
+			else:
+				if 'from' not in q and 'hours' not in q:
+					raise ValueError('période manquante (from/to ou hours)')
+				start, end = parse_range(q)
+				n = self.store.purge(start, end)
+		except ValueError as e:
+			return self.send(400, 'text/plain; charset=utf-8', str(e).encode())
+		log.warning('Purge par %s : %d message(s) supprimé(s) (%s)', self.client_address[0], n,
+			'tout' if start is None else '%s → %s' % (start, end))
+		self.send(200, 'application/json; charset=utf-8', json.dumps({'deleted': n}).encode())
+
 
 PAGE = r'''<!doctype html>
 <html lang="fr">
@@ -403,6 +443,11 @@ header h1 { font-size:18px; margin:0; }
 header .sp { flex:1; }
 #range { display:inline-flex; gap:8px; flex-wrap:wrap; align-items:center; }
 select, input, .btn { font:inherit; cursor:pointer; padding:4px 8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--fg); text-decoration:none; }
+.btn.danger { color:var(--bad); border-color:var(--bad); }
+.btn.danger:hover { background:var(--bad); color:#fff; }
+.btn:disabled { opacity:.5; cursor:default; }
+a { color:var(--accent); }
+@media (prefers-color-scheme: dark) { a { color:#60a5fa; } }
 main { display:grid; grid-template-columns: 340px 1fr; gap:16px; padding:16px; }
 @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
 .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
@@ -437,6 +482,8 @@ th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var
     <button id="show" class="btn">Afficher</button>
   </span>
   <a class="btn" id="csv" href="/api/export.csv">Export CSV</a>
+  <button id="purge" class="btn danger" title="Supprime les messages de la période affichée">Purger la période</button>
+  <button id="purgeAll" class="btn danger" title="Supprime tous les messages de la base">Tout purger</button>
 </header>
 <main>
   <div class="side">
@@ -501,6 +548,8 @@ function query() {
     : 'hours=' + $('hours').value;
 }
 
+let last = null;  // last /api/state answer, for the purge confirmation
+
 async function refresh() {
   let s;
   const q = query();
@@ -517,6 +566,9 @@ async function refresh() {
     const age = (new Date(s.now) - new Date(s.last_seen)) / 1000;
     $('age').textContent = age < 60 ? `en ligne · ${Math.round(age)} s` : age < 3600 ? `vu il y a ${Math.round(age/60)} min` : `hors ligne · ${tl(s.last_seen)}`;
     $('age').style.background = age < 30 ? 'var(--ok)' : age < 300 ? 'var(--warn)' : 'var(--bad)';
+  } else {
+    $('age').textContent = 'aucune donnée';
+    $('age').style.background = 'var(--muted)';
   }
   if (!p) { $('pos').innerHTML = none; marker.remove(); }
   else {
@@ -551,6 +603,8 @@ async function refresh() {
     ['Du', esc(tl(s.start))], ['Au', esc(tl(s.end))], ['Points', st.points],
     ['Distance', f(st.km, 2, ' km')], ['Vitesse max', f(st.max_speed, 1, ' km/h')]]);
   $('count').textContent = s.count;
+  last = s;
+  $('purge').disabled = !s.count;
   $('rows').innerHTML = s.recent.map(r => r.kind === 'other'
     ? `<tr><td>${esc(tl(r.received))}</td><td><span class="tag">brut</span></td><td colspan="11">${esc(r.raw)}</td></tr>`
     : `<tr><td>${esc(tl(r.received))}</td><td><span class="tag ${r.kind}">${r.kind}</span></td><td>${esc(t(r.device_time))}</td>
@@ -565,6 +619,28 @@ $('to').value = local(now);
 $('hours').onchange = () => { fitPending = true; refresh(); };
 $('show').onclick = () => { $('hours').value = 'custom'; fitPending = true; refresh(); };
 $('from').onchange = $('to').onchange = $('show').onclick;
+
+async function purge(q) {
+  const r = await fetch('/api/purge?' + q, {method: 'POST', headers: {'X-ZX980': 'purge'}});
+  if (!r.ok) throw new Error(await r.text());
+  return (await r.json()).deleted;
+}
+$('purge').onclick = async () => {
+  const q = query();  // same period as the one displayed
+  if (!last || !last.count) return;
+  if (last.start > last.end) return alert('La date de début est après la date de fin.');
+  if (!confirm(`Supprimer définitivement les ${last.count} messages reçus\ndu ${tl(last.start)}\nau ${tl(last.end)} ?\n\nCette action est irréversible.`)) return;
+  try { alert(`${await purge(q)} message(s) supprimé(s).`); }
+  catch (e) { alert('Échec de la purge : ' + e.message); }
+  refresh();
+};
+$('purgeAll').onclick = async () => {
+  if (!confirm('Supprimer TOUS les messages de la base, toutes dates confondues ?\n\nCette action est irréversible.')) return;
+  if (prompt('Pour confirmer, tapez SUPPRIMER :') !== 'SUPPRIMER') return alert('Purge annulée.');
+  try { alert(`${await purge('all=1')} message(s) supprimé(s). La base est vide.`); }
+  catch (e) { alert('Échec de la purge : ' + e.message); }
+  refresh();
+};
 refresh();
 setInterval(refresh, 5000);
 </script>

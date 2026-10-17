@@ -16,9 +16,9 @@ Deux formats de ligne sont reconnus :
 - courte (toutes les 10 s) : `date,lon,lat,alt,vitesse,`
 - complète (toutes les 60 s) : `date,batterie,fix,lon,lat,alt,vitesse,ip,opérateur,réseau,téléphone,satellites,`. L'ancien format sans `satellites` (11 champs) est toujours accepté.
 
-Le champ satellites vaut par exemple `7/12(BD4+GP8)` : 7 utilisés, 12 visibles, dont 4 BeiDou et 8 GPS. Il est stocké tel quel dans la colonne `satellites`, ajoutée automatiquement aux bases existantes au démarrage, et affiché dans l'encart Appareil.
+Le champ satellites vaut par exemple `7/12(BD4+GP8)` : 7 utilisés, 12 visibles, dont 4 BeiDou et 8 GPS. Il est stocké tel quel dans la colonne `satellites`, ajoutée automatiquement aux bases existantes au démarrage. Affiché dans l'encart Appareil (utilisés / visibles, puis visibles par constellation : GPS, BeiDou…) et dans la colonne Satellites du tableau.
 
-Le champ batterie vaut par exemple `100%(4165mV)`. Seul le pourcentage est stocké dans la colonne `battery`. La tension reste disponible dans la ligne brute (`raw`).
+Le champ batterie vaut par exemple `100%(4165mV)` : le pourcentage va dans la colonne `battery`, la tension dans `battery_mv` (ajoutée et remplie depuis les lignes brutes au démarrage pour les bases existantes). Les deux sont affichés (`100 % · 4.17 V`).
 
 Les messages sont stockés dans SQLite (`/var/db/zx980/zx980.sqlite`). Les lignes non reconnues sont gardées en brut.
 

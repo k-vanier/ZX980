@@ -79,10 +79,20 @@ def number(text, suffix):
 
 
 def parse_line(texte):
-	"""CSV line from gps_post.py -> dict of FIELDS (missing ones = None)"""
+	"""CSV line from gps_post.py -> dict of FIELDS (missing ones = None).
+	'SOS,' + full line (button held 3 s) -> kind 'sos'; without GPS fix its
+	position fields are '?' and stay None."""
 	parts = [p.strip() for p in texte.split(',')]
 	if parts and parts[-1] == '':
 		parts.pop()
+	if parts and parts[0] == 'SOS':
+		out = parse_fields(parts[1:])
+		out['kind'] = 'sos'
+		return out
+	return parse_fields(parts)
+
+
+def parse_fields(parts):
 	out = dict.fromkeys(FIELDS)
 	try:
 		out['device_time'] = datetime.strptime(parts[0], '%d/%m/%Y %H:%M:%S').isoformat()
@@ -174,6 +184,8 @@ class Store:
 		recent = self.query('SELECT * FROM messages WHERE received BETWEEN ? AND ? '
 			'ORDER BY id DESC LIMIT ?', rng + (limit,))
 		count = self.query('SELECT COUNT(*) AS n FROM messages WHERE received BETWEEN ? AND ?', rng)[0]['n']
+		last_sos = self.query("SELECT * FROM messages WHERE kind='sos' AND received BETWEEN ? AND ? "
+			'ORDER BY id DESC LIMIT 1', rng)
 		# stationary GPS jitter (a few metres every 10 s) would add up: count only moving segments
 		dist = sum(haversine_km(a['lat'], a['lon'], b['lat'], b['lon']) for a, b in zip(track, track[1:])
 			if max(a['speed'] or 0, b['speed'] or 0) >= MOVING_KMH)
@@ -186,6 +198,7 @@ class Store:
 			'last_seen': last_seen,
 			'last_full': last_full[0] if last_full else None,
 			'last_pos': last_pos[0] if last_pos else None,
+			'last_sos': last_sos[0] if last_sos else None,
 			'track': [[t['lat'], t['lon']] for t in track],
 			'stats': {'points': len(track), 'km': round(dist, 2), 'max_speed': max(speeds, default=None)},
 			'recent': recent,
@@ -465,12 +478,16 @@ th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var
 .scroll { max-height:420px; overflow:auto; }
 .tag { font-size:11px; padding:1px 6px; border-radius:4px; background:var(--line); }
 .tag.full { background:var(--accent); color:#fff; }
+.tag.sos { background:var(--bad); color:#fff; font-weight:700; }
+#sos { display:none; background:var(--bad); color:#fff; font-weight:700; padding:4px 10px; border-radius:6px; }
+#sos a { color:#fff; }
 </style>
 </head>
 <body>
 <header>
   <h1>ZX980 Tracker</h1>
   <span id="age">—</span>
+  <span id="sos"></span>
   <span class="sp"></span>
   <label>Trace <select id="hours">
     <option value="1">1 h</option><option value="6">6 h</option>
@@ -570,6 +587,10 @@ async function refresh() {
     $('age').textContent = 'aucune donnée';
     $('age').style.background = 'var(--muted)';
   }
+  const sos = s.last_sos;
+  $('sos').style.display = sos ? 'inline' : 'none';
+  if (sos) $('sos').innerHTML = `⚠ SOS reçu ${esc(tl(sos.received))}` + (sos.lat == null ? ' · sans position GPS'
+    : ` · <a href="https://www.google.com/maps?q=${sos.lat},${sos.lon}" target="_blank">voir la position</a>`);
   if (!p) { $('pos').innerHTML = none; marker.remove(); }
   else {
     dl($('pos'), [

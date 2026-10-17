@@ -354,12 +354,111 @@ def wait_network():
 		print('Network not ready: stage=%d state=%d, retrying' % (stage, state))
 
 
+# --- Button (module PWRKEY, read with misc.PowerKey) ---------------------------
+# short press  : send the full line now
+# double press : pause / resume the periodic sending (red LED blinks while paused)
+# press >= 3 s : SOS, sent even without GPS fix, retried until the server accepts it
+# (a press of about 10 s powers the board off in hardware: nothing is mapped there)
+SOS_PRESS_MS = 3000
+DOUBLE_PRESS_MS = 500     # max gap between the two presses of a double press
+SOS_RETRY_MS = 10000
+
+button = None             # PowerKey object, kept referenced so its callback stays alive
+btn_down_at = None
+btn_clicks = 0
+btn_last_release = 0
+send_now_requested = False
+sos_requested = False
+paused = False
+
+
+def on_button(status):
+	"""PowerKey callback (1 = pressed, 0 = released): only records, run() does the work"""
+	global btn_down_at, btn_clicks, btn_last_release, sos_requested
+	now = utime.ticks_ms()
+	if status == 1:
+		btn_down_at = now
+	elif btn_down_at is not None:
+		held = utime.ticks_diff(now, btn_down_at)
+		btn_down_at = None
+		if held >= SOS_PRESS_MS:
+			sos_requested = True
+			btn_clicks = 0
+		else:
+			btn_clicks += 1
+			btn_last_release = now
+
+
+def setup_button():
+	global button
+	try:
+		from misc import PowerKey
+		button = PowerKey()
+		button.powerKeyEventRegister(on_button)
+		print('Button ready: short = send now, double = pause/resume, 3 s = SOS')
+	except Exception as e:
+		print('Button not available:', e)
+
+
+def resolve_clicks():
+	"""Called by run(): once DOUBLE_PRESS_MS has passed after the last release,
+	1 click = send now, 2 clicks or more = pause/resume"""
+	global btn_clicks, send_now_requested, paused
+	if not btn_clicks or utime.ticks_diff(utime.ticks_ms(), btn_last_release) < DOUBLE_PRESS_MS:
+		return
+	if btn_clicks >= 2:
+		paused = not paused
+		print('Periodic sending %s' % ('PAUSED' if paused else 'RESUMED'))
+	else:
+		send_now_requested = True
+	btn_clicks = 0
+
+
+def rtc_france_time():
+	"""Module clock (set by the network, already Paris time) for an SOS without GPS fix"""
+	t = utime.localtime()
+	return '%02d/%02d/%04d %02d:%02d:%02d' % (t[2], t[1], t[0], t[3], t[4], t[5])
+
+
+def build_sos_line():
+	"""'SOS,' + full line; without GPS fix the position fields are '?' and the date
+	comes from the module clock"""
+	if has_fix():
+		return 'SOS,' + build_line()
+	import dataCall
+	import net
+	import sim
+	return 'SOS,%s,%s,%s,?,?,?,?,%s,%s,%s,%s,%s,' % (
+		rtc_france_time(),
+		safe(battery_field),
+		{2: '2D', 3: '3D'}.get(fix_type, '?'),
+		safe(lambda: dataCall.getInfo(1, 0)[2][2]),
+		safe(lambda: net.operatorName()[0]),
+		safe(cell_signal),
+		safe(sim.getPhoneNumber),
+		safe(satellites_field))
+
+
+def send_line(host, port, path, line, red_led, blinks=SENT_BLINKS):
+	"""POST one line, flash the red LED if accepted; returns True on HTTP 2xx"""
+	try:
+		status, _ = post_json(host, port, path, {'texte': line})
+		print('HTTP %d: %s' % (status, line))
+		if 200 <= status < 300:
+			for _ in range(blinks // SENT_BLINKS):
+				blink_sent(red_led)
+			return True
+	except Exception as e:
+		print('POST error:', e)
+	return False
+
+
 led_started = False
 
 
 def run(config=None):
 	"""config: dict from post_message.load_config() (read from /usr/config.json if None)"""
-	global led_started, gps_fix
+	global led_started, gps_fix, send_now_requested, sos_requested
 	if config is None:
 		config = load_config()
 	host, port, path = config['server_host'], config['server_port'], config['server_path']
@@ -367,6 +466,7 @@ def run(config=None):
 		_thread.start_new_thread(led_thread, ())
 		# started before wait_network(): must work even without 4G coverage
 		_thread.start_new_thread(battery_thread, ())
+		setup_button()
 		led_started = True
 	wait_network()
 	uart = UART(NMEA_PORT, 9600, 8, 0, 1, 0)
@@ -376,11 +476,41 @@ def run(config=None):
 	print('GPS on, sending GPS line every %d ms and full line every %d ms to %s:%d%s' % (
 		GPS_INTERVAL_MS, FULL_INTERVAL_MS, host, port, path))
 	buf = b''
-	last_gps = last_full = utime.ticks_ms()
+	last_gps = last_full = last_pause_blink = utime.ticks_ms()
+	last_sos_try = utime.ticks_add(last_gps, -SOS_RETRY_MS)  # first SOS attempt is immediate
 	try:
 		while True:
 			buf = read_nmea(uart, buf)
+			resolve_clicks()
 			now = utime.ticks_ms()
+
+			# SOS: sent with or without GPS fix, retried until the server accepts it
+			# (sos_requested is global, so a pending SOS survives a restart of run())
+			if sos_requested and utime.ticks_diff(now, last_sos_try) >= SOS_RETRY_MS:
+				last_sos_try = now
+				print('Sending SOS')
+				if send_line(host, port, path, build_sos_line(), red_led, blinks=2 * SENT_BLINKS):
+					sos_requested = False
+
+			# short press: full line right away (quality filter skipped: explicit request)
+			if send_now_requested:
+				send_now_requested = False
+				if has_fix():
+					send_line(host, port, path, build_line(), red_led)
+					last_gps = last_full = now
+				else:
+					print('Send now: no GPS fix, nothing sent')
+
+			if paused:
+				# no periodic sending; short red flash every 2 s to show the pause
+				if utime.ticks_diff(now, last_pause_blink) >= 2000:
+					last_pause_blink = now
+					red_led.write(1)
+					utime.sleep_ms(50)
+					red_led.write(0)
+				utime.sleep_ms(100)
+				continue
+
 			full_due = utime.ticks_diff(now, last_full) >= FULL_INTERVAL_MS
 			gps_due = utime.ticks_diff(now, last_gps) >= GPS_INTERVAL_MS
 			if full_due or gps_due:
@@ -392,14 +522,7 @@ def run(config=None):
 				if has_fix() and not good:
 					print('Imprecise position (%s), nothing sent' % reason)
 				elif has_fix():
-					try:
-						line = build_line() if full_due else build_gps_line()
-						status, _ = post_json(host, port, path, {'texte': line})
-						print('HTTP %d: %s' % (status, line))
-						if 200 <= status < 300:
-							blink_sent(red_led)
-					except Exception as e:
-						print('POST error:', e)
+					send_line(host, port, path, build_line() if full_due else build_gps_line(), red_led)
 				else:
 					print('No GPS fix, nothing sent')
 			utime.sleep_ms(100)

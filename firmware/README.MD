@@ -55,8 +55,20 @@ Nothing is sent until the GPS has a **precise** position: 3D fix, HDOP ≤ 2.5 a
 | LED | GPIO | Behaviour |
 |---|---|---|
 | 🟡 Yellow (orange on the board) | GPIO17 | Blinks fast (4 Hz) when the GPS has a position, off otherwise |
-| 🔴 Red | GPIO15 | 3 quick flashes for each message accepted by the server (HTTP 2xx) |
+| 🔴 Red | GPIO15 | 3 quick flashes for each message accepted by the server (HTTP 2xx), 6 for an SOS. Short flash every 2 s while sending is paused |
 | 🔵 Blue | GPIO16 | Not used by the code |
+
+### Button
+
+The button on the back is the module's power key (PWRKEY), read with `misc.PowerKey` (found with `button_test.py`: it is not wired to any GPIO).
+
+| Press | Action |
+|---|---|
+| Short (< 3 s) | Sends the full line right away, if the GPS has a fix (quality filter skipped: explicit request) |
+| Double (two presses within 0.5 s) | Pauses / resumes the periodic sending. The red LED flashes every 2 s while paused. Short press and SOS still work |
+| Held ≥ 3 s | **SOS**: sends `SOS,` + the full line, even without a GPS fix (position `?`, date from the module clock). Retried every 10 s until the server accepts it, then 6 red flashes |
+
+A press of about 10 s powers the board off in hardware: do not hold it that long. Settings: `SOS_PRESS_MS`, `DOUBLE_PRESS_MS`, `SOS_RETRY_MS` at the top of `gps_post.py`.
 
 ## Contents of the `usr/` folder
 
@@ -112,6 +124,7 @@ During GPS tests, rename `main.py`, otherwise `gps_post` uses the GPS at the sam
 
 | Script | Role |
 |---|---|
+| `button_test.py` | Finds how the button is wired: `misc.PowerKey` events, then every free GPIO read as an input |
 | `check_ec800m.py` | Checks the model, firmware and QuecPython modules, lights the 3 LEDs and tests NMEA reception |
 | `device_info.py` | Prints everything the module can report: module, battery, SIM, network, cells, Wi-Fi, satellites |
 | `scan_wifi_gps.py` | Wi-Fi scan (MAC + RSSI), then continuous display of the NMEA sentences |

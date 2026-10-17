@@ -17,6 +17,14 @@ LED_YELLOW = Pin.GPIO17  # pin76: fast blink while the GPS has a fix
 FIX_BLINK_MS = 125       # yellow on/off time with a fix (4 Hz)
 FIX_TIMEOUT_MS = 5000    # no valid RMC for this long = fix lost
 
+# Position quality filter: positions not meeting all three are not sent
+MIN_FIX_TYPE = 3         # 3 = 3D fix only (2 to also accept 2D)
+MAX_HDOP = 2.5           # horizontal dilution of precision (GGA), lower is better
+MIN_SATS_USED = 6        # satellites used in the fix (GGA)
+
+# AT6558 constellations ($PCAS04 bitmask): 1 GPS, 2 BeiDou, 4 GLONASS -> 7 = all three
+GNSS_MODE = 7
+
 LOW_BATTERY_MV = 3500      # power off below this voltage (on battery only)
 LOW_BATTERY_CHECKS = 3     # consecutive low readings required
 BATTERY_CHECK_MS = 30000   # time between two battery checks
@@ -35,6 +43,7 @@ last_lat = 0.0
 last_lon = 0.0
 last_speed_kmh = 0.0
 last_altitude = None  # metres above sea level, from GGA
+last_hdop = None      # horizontal dilution of precision, from GGA
 fix_type = 1       # GSA: 1 = no fix, 2 = 2D, 3 = 3D
 
 # net.getNetMode()[3] (access technology) -> label
@@ -77,12 +86,38 @@ def nmea_to_degrees(value, hemisphere):
 
 
 def to_dms(deg, pos, neg):
-	"""Decimal degrees -> 49°08'48.0"N (rounded to 0.1 s without 60.0 s carry issues)"""
-	tenths = int(abs(deg) * 36000 + 0.5)
-	d = tenths // 36000
-	m = (tenths % 36000) // 600
-	s = tenths % 600
-	return '%d°%d\'%d.%d"%s' % (d, m, s // 10, s % 10, neg if deg < 0 else pos)
+	"""Decimal degrees -> 49°08'48.00"N, rounded to 0.01 s (about 30 cm) without 60.00 s carry issues"""
+	hundredths = int(abs(deg) * 360000 + 0.5)
+	d = hundredths // 360000
+	m = (hundredths % 360000) // 6000
+	s = hundredths % 6000
+	return '%d°%d\'%d.%02d"%s' % (d, m, s // 100, s % 100, neg if deg < 0 else pos)
+
+
+def nmea_command(body):
+	"""'PCAS04,7' -> b'$PCAS04,7*1E\\r\\n' (checksum = XOR of the characters between $ and *)"""
+	cs = 0
+	for c in body:
+		cs ^= ord(c)
+	return ('$%s*%02X\r\n' % (body, cs)).encode()
+
+
+def configure_gps(uart):
+	"""Settings are lost each time GPIO10 cuts the GPS power: send them after every power-on"""
+	utime.sleep_ms(1000)  # let the chip boot
+	uart.write(nmea_command('PCAS04,%d' % GNSS_MODE))
+	print('GPS constellations set to mode %d' % GNSS_MODE)
+
+
+def good_fix():
+	"""(True, '') or (False, reason) according to MIN_FIX_TYPE, MAX_HDOP and MIN_SATS_USED"""
+	if fix_type < MIN_FIX_TYPE:
+		return False, 'fix %dD' % fix_type if fix_type > 1 else 'no 2D/3D fix'
+	if last_hdop is None or last_hdop > MAX_HDOP:
+		return False, 'HDOP %s > %s' % (last_hdop, MAX_HDOP)
+	if sats_used < MIN_SATS_USED:
+		return False, '%d satellites < %d' % (sats_used, MIN_SATS_USED)
+	return True, ''
 
 
 def parse_rmc(line):
@@ -106,10 +141,11 @@ def parse_rmc(line):
 
 def parse_gga(line):
 	"""$xxGGA,time,lat,N,lon,E,quality,sats,hdop,altitude,M,..."""
-	global last_altitude, sats_used
+	global last_altitude, sats_used, last_hdop
 	f = line.split(b',')
 	try:
 		sats_used = int(f[7].decode()) if f[7] else 0
+		last_hdop = float(f[8].decode()) if f[8] else None
 		if f[6] != b'0' and f[9]:
 			last_altitude = float(f[9].decode())
 	except (ValueError, IndexError):
@@ -336,6 +372,7 @@ def run(config=None):
 	uart = UART(NMEA_PORT, 9600, 8, 0, 1, 0)
 	en_pin = Pin(ENABLE_PIN, Pin.OUT, Pin.PULL_DISABLE, 1)
 	red_led = Pin(LED_RED, Pin.OUT, Pin.PULL_DISABLE, 0)
+	configure_gps(uart)
 	print('GPS on, sending GPS line every %d ms and full line every %d ms to %s:%d%s' % (
 		GPS_INTERVAL_MS, FULL_INTERVAL_MS, host, port, path))
 	buf = b''
@@ -351,7 +388,10 @@ def run(config=None):
 				last_gps = now
 				if full_due:
 					last_full = now
-				if has_fix():
+				good, reason = good_fix()
+				if has_fix() and not good:
+					print('Imprecise position (%s), nothing sent' % reason)
+				elif has_fix():
 					try:
 						line = build_line() if full_due else build_gps_line()
 						status, _ = post_json(host, port, path, {'texte': line})

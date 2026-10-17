@@ -73,7 +73,50 @@ The dashboard (page, `/api/state`, CSV export) asks for a username and password 
 - If the file is missing, the dashboard is locked (everything is refused).
 - `sysrc zx980_authfile=""` disables the password.
 
-The password travels in clear text (base64) on the local network, because the server uses HTTP. Do not open port 8090 to the internet.
+Without HTTPS the password travels in clear text (base64) on the local network. Do not open port 8090 to the internet: use HTTPS with Caddy (below) instead.
+
+## HTTPS with Caddy
+
+[Caddy](https://caddyserver.com) sits in front of the dashboard: it answers in HTTPS on port 443 with a Let's Encrypt certificate that it obtains and renews on its own, and passes the requests to `zx980_server.py`, which then only listens on `127.0.0.1:8090`. The password and the positions are encrypted, so the dashboard and the Android app can be used from outside (4G) without a VPN.
+
+```
+browser / Android app ──HTTPS :443──▶ Caddy ──HTTP 127.0.0.1:8090──▶ zx980_server.py
+tracker ──────────────────HTTP :8080─────────────────────────────▶ zx980_server.py (unchanged)
+```
+
+Requirements:
+
+- **A domain name pointing to the router's public IP.** On a Freebox, Freebox OS can create a free `<name>.freeboxos.fr` (domain name settings). Any other domain with an A record works too.
+- **Ports 443 and 80 forwarded to the FreeBSD machine** on the router. 443 is enough for Let's Encrypt (TLS-ALPN challenge); 80 also lets Caddy redirect `http://` to `https://`. Check that the router's own remote access does not already use port 443 (on a Freebox: the remote access settings of Freebox OS).
+
+Installation (as root):
+
+1. Install Caddy:
+   ```sh
+   pkg install caddy
+   ```
+2. Copy [`Caddyfile`](Caddyfile) to `/usr/local/etc/caddy/Caddyfile`, then replace `tracker.example.com` with your domain name (and optionally set `email`). Check it:
+   ```sh
+   caddy validate --config /usr/local/etc/caddy/Caddyfile
+   ```
+3. Start Caddy and enable it at boot:
+   ```sh
+   sysrc caddy_enable=YES
+   service caddy start
+   ```
+4. Make the dashboard listen on the local loopback only, so it cannot be reached without HTTPS (keep any other options you already had in `zx980_args`):
+   ```sh
+   sysrc zx980_args="--web-host 127.0.0.1"
+   service zx980 restart
+   ```
+5. Open `https://<your domain>/` (no port). The first certificate takes a few seconds; `service caddy status` and `/var/log/messages` show errors if it fails. In the Android app, change the dashboard address to `https://<your domain>`.
+
+Notes:
+
+- The tracker keeps sending to port 8080 in plain HTTP; Caddy does not touch it.
+- After step 4, `http://<ip>:8090` no longer answers on the local network: use `https://<your domain>/` at home too (the Freebox routes it back to the server).
+- Behind Caddy, the server logs the visitor's real address (from `X-Forwarded-For`) for failed logins and purges, instead of `127.0.0.1`.
+- `Strict-Transport-Security` in the Caddyfile makes browsers refuse plain HTTP for this domain for one year: remove that line while testing if you might go back.
 
 ## Configuration (`sysrc`)
 
@@ -85,7 +128,7 @@ The password travels in clear text (base64) on the local network, because the se
 | `zx980_dbdir` | `/var/db/zx980` |
 | `zx980_logfile` | `/var/log/zx980.log` |
 | `zx980_authfile` | `/usr/local/etc/zx980.users` (`""` = no password) |
-| `zx980_args` | (empty), e.g. `--api-port 8080 --web-port 8090 -v` |
+| `zx980_args` | (empty), e.g. `--api-port 8080 --web-port 8090 -v`, or `--web-host 127.0.0.1` behind Caddy |
 
 Do not use `zx980_user`: rc.subr would then run `daemon(8)` itself as that user, which can no longer write its pid files.
 

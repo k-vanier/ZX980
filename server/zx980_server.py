@@ -514,8 +514,10 @@ th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var
 .tag.full { background:var(--accent); color:#fff; }
 .tag.sos { background:var(--bad); color:#fff; font-weight:700; }
 .tag.manual { background:#db2777; color:#fff; }
-#sos { display:none; background:var(--bad); color:#fff; font-weight:700; padding:4px 10px; border-radius:6px; overflow-wrap:anywhere; }
+#sos { display:none; align-items:center; gap:8px; background:var(--bad); color:#fff; font-weight:700; padding:4px 6px 4px 10px; border-radius:6px; overflow-wrap:anywhere; }
 #sos a { color:#fff; }
+#sos .close { flex:none; width:22px; height:22px; padding:0; border:0; border-radius:4px; background:rgba(255,255,255,.18); color:#fff; font:700 16px/22px system-ui, sans-serif; cursor:pointer; }
+#sos .close:hover { background:rgba(255,255,255,.35); }
 </style>
 </head>
 <body>
@@ -607,6 +609,15 @@ function query() {
 
 let last = null;  // last /api/state answer, for the purge confirmation
 
+// SOS banner closed with its ×: remembered in this browser by message id, so a newer SOS shows again
+const dismissedSos = () => { try { return localStorage.getItem('zx980.dismissedSos'); } catch (e) { return window._dismissedSos || null; } };
+$('sos').addEventListener('click', e => {
+  if (!e.target.closest('.close')) return;
+  const id = $('sos').dataset.id;
+  try { localStorage.setItem('zx980.dismissedSos', id); } catch (err) { window._dismissedSos = id; }
+  $('sos').style.display = 'none';
+});
+
 async function refresh() {
   let s;
   const q = query();
@@ -627,10 +638,14 @@ async function refresh() {
     $('age').textContent = 'aucune donnée';
     $('age').style.background = 'var(--muted)';
   }
-  const sos = s.last_sos;
-  $('sos').style.display = sos ? 'inline' : 'none';
-  if (sos) $('sos').innerHTML = `⚠ SOS reçu ${esc(tl(sos.received))}` + (sos.lat == null ? ' · sans position GPS'
-    : ` · <a href="https://www.google.com/maps?q=${sos.lat},${sos.lon}" target="_blank">voir la position</a>`);
+  const sos = s.last_sos && String(s.last_sos.id) !== dismissedSos() ? s.last_sos : null;
+  $('sos').style.display = sos ? 'inline-flex' : 'none';
+  if (sos) {
+    $('sos').dataset.id = sos.id;
+    $('sos').innerHTML = `<span>⚠ SOS reçu ${esc(tl(sos.received))}` + (sos.lat == null ? ' · sans position GPS'
+      : ` · <a href="https://www.google.com/maps?q=${sos.lat},${sos.lon}" target="_blank">voir la position</a>`) +
+      `</span><button class="close" title="Masquer cette alerte (un nouveau SOS la réaffiche)" aria-label="Masquer l'alerte">×</button>`;
+  }
   if (!p) { $('pos').innerHTML = none; marker.remove(); }
   else {
     dl($('pos'), [

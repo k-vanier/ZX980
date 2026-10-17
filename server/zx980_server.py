@@ -362,14 +362,23 @@ class WebHandler(BaseHTTPRequestHandler):
 	store = None
 	users = None  # Users, or None = no access control
 
+	@property
+	def client_ip(self):
+		"""Behind a local reverse proxy (Caddy for HTTPS) every request comes from 127.0.0.1:
+		the proxy puts the real address last in X-Forwarded-For"""
+		forwarded = self.headers.get('X-Forwarded-For')
+		if forwarded and self.client_address[0] in ('127.0.0.1', '::1'):
+			return forwarded.split(',')[-1].strip()
+		return self.client_address[0]
+
 	def log_message(self, fmt, *args):
-		log.debug('web %s - %s', self.client_address[0], fmt % args)
+		log.debug('web %s - %s', self.client_ip, fmt % args)
 
 	def authorized(self):
 		if self.users is None or self.users.check(self.headers.get('Authorization')):
 			return True
 		if self.headers.get('Authorization'):  # browsers always try once without credentials first
-			log.warning('Mauvais identifiant ou mot de passe depuis %s', self.client_address[0])
+			log.warning('Mauvais identifiant ou mot de passe depuis %s', self.client_ip)
 		body = 'Accès protégé'.encode()
 		self.send_response(401)
 		self.send_header('WWW-Authenticate', 'Basic realm="ZX980 Tracker", charset="UTF-8"')
@@ -422,7 +431,7 @@ class WebHandler(BaseHTTPRequestHandler):
 		# the browser re-sends Basic credentials on its own, even for a form posted by another site:
 		# a custom header can only come from this page's fetch() (a cross-site one needs a CORS preflight)
 		if self.headers.get('X-ZX980') != 'purge':
-			log.warning('Purge refusée depuis %s : en-tête X-ZX980 absent', self.client_address[0])
+			log.warning('Purge refusée depuis %s : en-tête X-ZX980 absent', self.client_ip)
 			return self.send(403, 'text/plain; charset=utf-8', 'requête refusée'.encode())
 		q = parse_qs(url.query)
 		try:
@@ -436,7 +445,7 @@ class WebHandler(BaseHTTPRequestHandler):
 				n = self.store.purge(start, end)
 		except ValueError as e:
 			return self.send(400, 'text/plain; charset=utf-8', str(e).encode())
-		log.warning('Purge par %s : %d message(s) supprimé(s) (%s)', self.client_address[0], n,
+		log.warning('Purge par %s : %d message(s) supprimé(s) (%s)', self.client_ip, n,
 			'tout' if start is None else '%s → %s' % (start, end))
 		self.send(200, 'application/json; charset=utf-8', json.dumps({'deleted': n}).encode())
 
@@ -543,7 +552,7 @@ const satCell = s => {
 };
 
 const map = L.map('map').setView([46.6, 2.4], 6);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '&copy; OpenStreetMap'}).addTo(map);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '&copy; OpenStreetMap'}).addTo(map);
 const line = L.polyline([], {color: '#2563eb', weight: 3}).addTo(map);
 const marker = L.circleMarker([0, 0], {radius: 8, color: '#fff', weight: 2, fillColor: '#dc2626', fillOpacity: 1});
 const startMarker = L.circleMarker([0, 0], {radius: 7, color: '#fff', weight: 2, fillColor: '#16a34a', fillOpacity: 1});
@@ -687,7 +696,7 @@ def main():
 	ap.add_argument('--db', default='/var/db/zx980/zx980.sqlite')
 	ap.add_argument('--api-host', default='0.0.0.0')
 	ap.add_argument('--api-port', type=int, default=8080, help='POST /message (ouvert sur internet)')
-	ap.add_argument('--web-host', default='0.0.0.0')
+	ap.add_argument('--web-host', default='0.0.0.0', help='127.0.0.1 derrière Caddy (HTTPS)')
 	ap.add_argument('--web-port', type=int, default=8090, help='tableau de bord (réseau local)')
 	ap.add_argument('--auth-file', help="fichier d'accès au tableau de bord (absent = pas de mot de passe)")
 	ap.add_argument('--add-user', metavar='NOM', help="crée ou change l'accès NOM dans --auth-file, puis quitte")

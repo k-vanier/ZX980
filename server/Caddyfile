@@ -1,0 +1,23 @@
+# Caddy in front of the ZX980 dashboard: HTTPS with an automatic Let's Encrypt certificate.
+# Installation: /usr/local/etc/caddy/Caddyfile (see README.md, "HTTPS with Caddy").
+# zx980_server.py then listens on 127.0.0.1:8090 only (sysrc zx980_args="--web-host 127.0.0.1").
+
+{
+	# address used by Let's Encrypt for expiry warnings (optional)
+	# email you@example.com
+}
+
+# replace with the domain name that points to your router
+tracker.example.com {
+	encode gzip
+	reverse_proxy 127.0.0.1:8090
+
+	header {
+		# browsers will refuse plain HTTP for this domain for one year
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		# keep the default referrer: tile.openstreetmap.org blocks map tiles requested without one
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+}

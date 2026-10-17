@@ -20,14 +20,14 @@ This project is adapted from [FoxExe/ZX908](https://github.com/FoxExe/ZX908), or
 
 Request `POST http://<server_host>:<server_port><server_path>` (set in [`usr/config.json`](usr/config.json)), with the JSON body `{"texte": "<CSV line>"}`.
 
-**Short line (every 10 s), 5 fields:**
+**Short line (every 3 s by default, `gps_interval_s` in `config.json`), 5 fields:**
 
 ```
 datefrance,posX,posY,altitude,vitesse,
 16/10/2026 19:40:39,0°13'36.00"E,49°08'48.00"N,45.2m,0.0km/h,
 ```
 
-**Full line (every 60 s, instead of the short line), 12 fields:**
+**Full line (every 60 s by default, `full_interval_s` in `config.json`, instead of the short line), 12 fields:**
 
 ```
 datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vitesse,IP,operator,signal,telephone,satellites,
@@ -48,27 +48,36 @@ datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vitesse,IP,operator,signal,tel
 | `telephone` | `sim.getPhoneNumber()` | Number stored on the SIM card |
 | `satellites` | GPS (GGA, GSV) | `used/in view(details)`. Example: `7/12(BD4+GP8)` = 7 satellites used for the fix, 12 in view, of which 4 BeiDou (`BD`) and 8 GPS (`GP`). `GL` = GLONASS, `GA` = Galileo |
 
-Nothing is sent until the GPS has a **precise** position: 3D fix, HDOP ≤ 2.5 and at least 6 satellites used (`MIN_FIX_TYPE`, `MAX_HDOP`, `MIN_SATS_USED`). Otherwise the REPL prints `Imprecise position (HDOP 3.1 > 2.5), nothing sent`. Indoors or with the antenna badly placed, the tracker can therefore stay silent: relax these thresholds if needed. Data usage: about 10 MB per day, i.e. 300 to 350 MB per month when running continuously. Each message costs about 1.1 KB, because it includes a DNS lookup and a full TCP connection, whereas the CSV line itself is only about 75 bytes.
+Nothing is sent until the GPS has a **precise** position: 3D fix, HDOP ≤ 2.5 and at least 6 satellites used (`MIN_FIX_TYPE`, `MAX_HDOP`, `MIN_SATS_USED`). Otherwise the REPL prints `Imprecise position (HDOP 3.1 > 2.5), nothing sent`. Indoors or with the antenna badly placed, the tracker can therefore stay silent: relax these thresholds if needed. Data usage with the default intervals (3 s / 60 s): about 32 MB per day, i.e. about 1 GB per month when running continuously (about 600 MB at 5 s, 300 MB at 10 s). At 3 s, a send on a weak 4G signal can take longer than the interval, so the actual interval can be 3 to 4 s, and the 4G radio never goes idle, which shortens battery life. Each message costs about 1.1 KB, because it includes a DNS lookup and a full TCP connection, whereas the CSV line itself is only about 75 bytes.
 
 ### LEDs
 
 | LED | GPIO | Behaviour |
 |---|---|---|
-| 🟡 Yellow (orange on the board) | GPIO17 | Blinks fast (4 Hz) when the GPS has a position, off otherwise |
-| 🔴 Red | GPIO15 | 3 quick flashes for each message accepted by the server (HTTP 2xx), 6 for an SOS. Short flash every 2 s while sending is paused |
-| 🔵 Blue | GPIO16 | Not used by the code |
+| 🟡 Yellow (orange on the board) | GPIO17 | Blinks (4 Hz) when the GPS has a position, off otherwise |
+| 🔴 Red | GPIO15 | 3 quick flashes for each message accepted by the server (HTTP 2xx), 6 for an SOS |
+| 🔵 Blue | GPIO16 | Button feedback only |
+
+**Button feedback** (1 or 2 clicks), on the three LEDs at once, while the send is in progress (at least 1 s; for an SOS, until the server accepts it):
+
+| LED | Pattern |
+|---|---|
+| 🔴 Red | Fast blink, 50 ms on / 50 ms off |
+| 🟡 Yellow | Fast blink, 60 ms on / 60 ms off |
+| 🔵 Blue | 2 quick flashes, 1 quick flash, then 0.5 s off, repeated |
+
+Then the red LED shows the 3 (send) or 6 (SOS) "accepted" flashes. All three LEDs are driven by one thread (`led_thread`) so they never conflict.
 
 ### Button
 
 The button on the back is the module's power key (PWRKEY), read with `misc.PowerKey` (found with `button_test.py`: it is not wired to any GPIO).
 
-| Press | Action |
+| Clicks | Action |
 |---|---|
-| Short (< 3 s) | Sends `MANUAL,` + the full line right away, if the GPS has a fix (quality filter skipped: explicit request). Shown with a pink tag on the dashboard |
-| Double (two presses within 0.5 s) | Pauses / resumes the periodic sending. The red LED flashes every 2 s while paused. Short press and SOS still work |
-| Held ≥ 3 s | **SOS**: sends `SOS,` + the full line, even without a GPS fix (position `?`, date from the module clock). Retried every 10 s until the server accepts it, then 6 red flashes |
+| 1 click | Sends `MANUAL,` + the full line right away, if the GPS has a fix (quality filter skipped: explicit request). Shown with a pink tag on the dashboard |
+| 2 quick clicks (within 0.5 s) | **SOS**: sends `SOS,` + the full line, even without a GPS fix (position `?`, date from the module clock). Retried every 10 s until the server accepts it. Shown in red on the dashboard |
 
-A press of about 10 s powers the board off in hardware: do not hold it that long. Settings: `SOS_PRESS_MS`, `DOUBLE_PRESS_MS`, `SOS_RETRY_MS` at the top of `gps_post.py`.
+A single click is confirmed only 0.5 s after release (to tell it from a double click). A press of about 10 s powers the board off in hardware: do not hold it that long. Settings: `DOUBLE_PRESS_MS`, `SOS_RETRY_MS`, `FEEDBACK_*`, `BLUE_*` at the top of `gps_post.py`.
 
 ## Contents of the `usr/` folder
 
@@ -81,26 +90,32 @@ Copy the whole folder to `/usr` on the module.
 | `main.py` | Runs automatically at startup: runs `gps_post.run()` in a thread and restarts it if it crashes |
 | `gps_post.py` | Reads the GPS, builds the CSV lines, sends them periodically, drives the LEDs |
 | `post_message.py` | `post_json()`: HTTP POST of a JSON body, adapted to QuecPython's quirks. `load_config()`: reads `config.json` |
-| `config.json` | API server address (see below) |
+| `config.json` | API server address and send intervals (see below) |
 
-### Server address: `config.json`
+### Server address and send intervals: `config.json`
 
 ```json
 {
 	"server_host": "totobsd.frouteos.fr",
 	"server_port": 8080,
-	"server_path": "/message"
+	"server_path": "/message",
+	"gps_interval_s": 3,
+	"full_interval_s": 60
 }
 ```
 
-`main.py`, `gps_post.py` and `post_message.py` read this file. To change server, edit `/usr/config.json` on the module and restart: the code does not change. If the file is missing or invalid, the script prints a message and uses the values above. At startup, `main.py` prints the address in use (`Server: ...`).
+| Key | Default | Role |
+|---|---|---|
+| `server_host`, `server_port`, `server_path` | — | API server address |
+| `gps_interval_s` | `3` | Short line (GPS position) every N seconds |
+| `full_interval_s` | `60` | Full line every N seconds (replaces the short line at that moment) |
+
+`main.py`, `gps_post.py` and `post_message.py` read this file. To change server or intervals, edit `/usr/config.json` on the module and restart: the code does not change. If the file is missing or invalid, the script prints a message and uses the defaults of `post_message.py`; an invalid interval falls back to its default, and intervals are at least 1 s. At startup, `main.py` prints the address in use (`Server: ...`).
 
 ### Other settings (top of `gps_post.py`)
 
 | Constant | Default | Role |
 |---|---|---|
-| `GPS_INTERVAL_MS` | `10000` | Short line interval |
-| `FULL_INTERVAL_MS` | `60000` | Full line interval |
 | `SENT_BLINKS` | `3` | Number of red flashes per message sent |
 | `FIX_BLINK_MS` | `125` | Yellow LED blink speed |
 | `FIX_TIMEOUT_MS` | `5000` | Time without a valid RMC sentence after which the position is considered lost |

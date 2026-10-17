@@ -7,6 +7,8 @@ DEFAULT_CONFIG = {
 	'server_host': 'unix.server.bsd',
 	'server_port': 8080,
 	'server_path': '/message',
+	'gps_interval_s': 3,    # short line (GPS position) every N seconds
+	'full_interval_s': 60,  # full line (GPS + battery, network...) every N seconds
 }
 MESSAGE = {'texte': 'Bonjour FreeBSD'}
 
@@ -22,6 +24,12 @@ def load_config():
 	except ValueError as e:
 		print('%s is not valid JSON (%s), using defaults' % (CONFIG_FILE, e))
 	config['server_port'] = int(config['server_port'])
+	for key in ('gps_interval_s', 'full_interval_s'):
+		try:
+			config[key] = max(1, int(config[key]))
+		except (TypeError, ValueError):
+			print('%s: invalid %s, using %d' % (CONFIG_FILE, key, DEFAULT_CONFIG[key]))
+			config[key] = DEFAULT_CONFIG[key]
 	return config
 
 

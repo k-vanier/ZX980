@@ -21,9 +21,9 @@ Standard Python 3 only (no uvicorn, fastapi or nginx).
 
 Two line formats are recognised:
 
-- short (every 10 s): `date,lon,lat,alt,speed,`
+- short (every 3 s by default, `gps_interval_s` in the tracker `config.json`): `date,lon,lat,alt,speed,`
 - full (every 60 s): `date,battery,fix,lon,lat,alt,speed,ip,operator,network,phone,satellites,`. The older format without `satellites` (11 fields) is still accepted.
-- SOS (button held 3 s on the tracker): `SOS,` followed by a full line. Without GPS fix the position fields are `?`. Stored with kind `sos`, shown with a red tag in the table, and the latest SOS of the period is shown as a red banner in the header, with a link to its position when there is one. Its × button hides that SOS in this browser (remembered across reloads); a newer SOS shows the banner again.
+- SOS (double click on the tracker button): `SOS,` followed by a full line. Without GPS fix the position fields are `?`. Stored with kind `sos`, shown with a red tag in the table, and the latest SOS of the period is shown as a red banner in the header, with a link to its position when there is one. Its × button hides that SOS in this browser (remembered across reloads); a newer SOS shows the banner again.
 - Manual send (short press on the tracker button): `MANUAL,` followed by a full line. Stored with kind `manual` and shown with a pink tag in the table. Manual and SOS lines also update the Appareil (device) card.
 
 The satellites field looks like `7/12(BD4+GP8)`: 7 used, 12 in view, of which 4 BeiDou and 8 GPS. It is stored as is in the `satellites` column, which is added automatically to existing databases at startup. It is shown in the Appareil (device) card (used / in view, then in view per constellation: GPS, BeiDou…) and in the Satellites column of the table.

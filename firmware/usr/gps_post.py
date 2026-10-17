@@ -492,11 +492,12 @@ def run(config=None):
 				if send_line(host, port, path, build_sos_line(), red_led, blinks=2 * SENT_BLINKS):
 					sos_requested = False
 
-			# short press: full line right away (quality filter skipped: explicit request)
+			# short press: full line right away (quality filter skipped: explicit request),
+			# prefixed with MANUAL so the server can tell it from the periodic ones
 			if send_now_requested:
 				send_now_requested = False
 				if has_fix():
-					send_line(host, port, path, build_line(), red_led)
+					send_line(host, port, path, 'MANUAL,' + build_line(), red_led)
 					last_gps = last_full = now
 				else:
 					print('Send now: no GPS fix, nothing sent')

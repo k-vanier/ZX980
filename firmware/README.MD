@@ -64,7 +64,7 @@ The button on the back is the module's power key (PWRKEY), read with `misc.Power
 
 | Press | Action |
 |---|---|
-| Short (< 3 s) | Sends the full line right away, if the GPS has a fix (quality filter skipped: explicit request) |
+| Short (< 3 s) | Sends `MANUAL,` + the full line right away, if the GPS has a fix (quality filter skipped: explicit request). Shown with a pink tag on the dashboard |
 | Double (two presses within 0.5 s) | Pauses / resumes the periodic sending. The red LED flashes every 2 s while paused. Short press and SOS still work |
 | Held ≥ 3 s | **SOS**: sends `SOS,` + the full line, even without a GPS fix (position `?`, date from the module clock). Retried every 10 s until the server accepts it, then 6 red flashes |
 

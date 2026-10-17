@@ -4,16 +4,17 @@ import checkNet
 from machine import Pin, UART
 from usr.post_message import post_json, load_config
 
-# Server address: /usr/config.json (server_host, server_port, server_path)
-GPS_INTERVAL_MS = 10000   # short line: GPS position only
-FULL_INTERVAL_MS = 60000  # full line: GPS + battery, network, phone
+# Server address and send intervals: /usr/config.json
+# (server_host, server_port, server_path, gps_interval_s, full_interval_s)
 
 # ZX908 (EC800N / EC800M): GPS AT6558 power on GPIO10 (pin54), NMEA on UART2 (pin17 RX / pin18 TX)
 NMEA_PORT = UART.UART2
 ENABLE_PIN = Pin.GPIO10
 LED_RED = Pin.GPIO15     # pin80: SENT_BLINKS quick flashes after each message sent
 SENT_BLINKS = 3
+SOS_BLINKS = 6
 LED_YELLOW = Pin.GPIO17  # pin76: fast blink while the GPS has a fix
+LED_BLUE = Pin.GPIO16    # pin81: button feedback only
 FIX_BLINK_MS = 125       # yellow on/off time with a fix (4 Hz)
 FIX_TIMEOUT_MS = 5000    # no valid RMC for this long = fix lost
 
@@ -50,27 +51,78 @@ fix_type = 1       # GSA: 1 = no fix, 2 = 2D, 3 = 3D
 NET_TECH = {0: '2G', 1: '2G', 2: '3G', 3: '2G', 4: '3G', 5: '3G', 6: '3G', 7: '4G', 9: '4G'}
 
 
+# --- LEDs: all three are driven by led_thread() only ----------------------------
+# Button feedback (send now / SOS in progress), all three LEDs at once:
+#   red fast blink, yellow fast blink, blue: 2 quick flashes, 1 quick flash, 0.5 s off
+FEEDBACK_RED_MS = 50       # red on/off time during feedback (10 Hz)
+FEEDBACK_YELLOW_MS = 60    # yellow on/off time during feedback (about 8 Hz)
+BLUE_FLASHES = ((0, 60), (120, 180), (300, 360))  # (on, off) in ms within one cycle
+BLUE_CYCLE_MS = 860        # last flash ends at 360 ms, then 500 ms off
+FEEDBACK_MIN_MS = 1000     # feedback shown at least this long
+FEEDBACK_MAX_MS = 30000    # safety: feedback stops by itself after this
+
+feedback_start = 0
+feedback_until = 0         # feedback shown while ticks_ms() is before this (or an SOS is pending)
+red_flash_start = 0
+red_flash_count = 0        # flashes still to show for "message accepted"
+
+
+def start_feedback():
+	global feedback_start, feedback_until
+	feedback_start = utime.ticks_ms()
+	feedback_until = utime.ticks_add(feedback_start, FEEDBACK_MAX_MS)
+
+
+def end_feedback():
+	"""Stop the feedback now, but not before FEEDBACK_MIN_MS"""
+	global feedback_until
+	feedback_until = utime.ticks_add(feedback_start, FEEDBACK_MIN_MS)
+	if utime.ticks_diff(utime.ticks_ms(), feedback_until) > 0:
+		feedback_until = utime.ticks_ms()
+
+
+def feedback_active(now):
+	return sos_requested or utime.ticks_diff(feedback_until, now) > 0
+
+
+def flash_red(count):
+	"""count quick red flashes = message accepted (shown after any running feedback)"""
+	global red_flash_start, red_flash_count
+	now = utime.ticks_ms()
+	red_flash_start = feedback_until if utime.ticks_diff(feedback_until, now) > 0 else now
+	red_flash_count = count
+
+
 def led_thread():
-	"""Yellow LED blinks fast while the GPS has a fix, off otherwise"""
-	led = Pin(LED_YELLOW, Pin.OUT, Pin.PULL_DISABLE, 0)
+	"""Yellow: blinks while the GPS has a fix. Red: flashes per message accepted.
+	Button feedback overrides all three. 20 ms resolution."""
+	global red_flash_count
+	red = Pin(LED_RED, Pin.OUT, Pin.PULL_DISABLE, 0)
+	yellow = Pin(LED_YELLOW, Pin.OUT, Pin.PULL_DISABLE, 0)
+	blue = Pin(LED_BLUE, Pin.OUT, Pin.PULL_DISABLE, 0)
+	t0 = utime.ticks_ms()
 	while True:
-		if has_fix():
-			led.write(1)
-			utime.sleep_ms(FIX_BLINK_MS)
-			led.write(0)
-			utime.sleep_ms(FIX_BLINK_MS)
+		now = utime.ticks_ms()
+		if feedback_active(now):
+			ph = utime.ticks_diff(now, feedback_start)
+			r = ph % (2 * FEEDBACK_RED_MS) < FEEDBACK_RED_MS
+			y = ph % (2 * FEEDBACK_YELLOW_MS) < FEEDBACK_YELLOW_MS
+			c = ph % BLUE_CYCLE_MS
+			b = any(on <= c < off for on, off in BLUE_FLASHES)
 		else:
-			led.write(0)
-			utime.sleep_ms(200)
-
-
-def blink_sent(led):
-	"""Red LED: SENT_BLINKS quick flashes = message accepted by the server"""
-	for _ in range(SENT_BLINKS):
-		led.write(1)
-		utime.sleep_ms(80)
-		led.write(0)
-		utime.sleep_ms(120)
+			b = False
+			y = has_fix() and utime.ticks_diff(now, t0) % (2 * FIX_BLINK_MS) < FIX_BLINK_MS
+			r = False
+			if red_flash_count:
+				rp = utime.ticks_diff(now, red_flash_start)
+				if rp >= red_flash_count * 200:
+					red_flash_count = 0
+				elif rp >= 0:
+					r = rp % 200 < 80
+		red.write(1 if r else 0)
+		yellow.write(1 if y else 0)
+		blue.write(1 if b else 0)
+		utime.sleep_ms(20)
 
 
 def has_fix():
@@ -355,38 +407,31 @@ def wait_network():
 
 
 # --- Button (module PWRKEY, read with misc.PowerKey) ---------------------------
-# short press  : send the full line now
-# double press : pause / resume the periodic sending (red LED blinks while paused)
-# press >= 3 s : SOS, sent even without GPS fix, retried until the server accepts it
-# (a press of about 10 s powers the board off in hardware: nothing is mapped there)
-SOS_PRESS_MS = 3000
-DOUBLE_PRESS_MS = 500     # max gap between the two presses of a double press
+# 1 click  : send the full line now (MANUAL)
+# 2 clicks : SOS, sent even without GPS fix, retried until the server accepts it
+# Both start the LED feedback (see led_thread). A press of about 10 s powers the
+# board off in hardware: nothing is mapped on long presses.
+DOUBLE_PRESS_MS = 500     # max gap between the two clicks of a double click
 SOS_RETRY_MS = 10000
 
 button = None             # PowerKey object, kept referenced so its callback stays alive
-btn_down_at = None
+btn_down = False
 btn_clicks = 0
 btn_last_release = 0
 send_now_requested = False
 sos_requested = False
-paused = False
 
 
 def on_button(status):
-	"""PowerKey callback (1 = pressed, 0 = released): only records, run() does the work"""
-	global btn_down_at, btn_clicks, btn_last_release, sos_requested
-	now = utime.ticks_ms()
+	"""PowerKey callback (1 = pressed, 0 = released): only counts clicks, run() does the work.
+	A release without a press (sent once at registration) is ignored."""
+	global btn_down, btn_clicks, btn_last_release
 	if status == 1:
-		btn_down_at = now
-	elif btn_down_at is not None:
-		held = utime.ticks_diff(now, btn_down_at)
-		btn_down_at = None
-		if held >= SOS_PRESS_MS:
-			sos_requested = True
-			btn_clicks = 0
-		else:
-			btn_clicks += 1
-			btn_last_release = now
+		btn_down = True
+	elif btn_down:
+		btn_down = False
+		btn_clicks += 1
+		btn_last_release = utime.ticks_ms()
 
 
 def setup_button():
@@ -395,23 +440,24 @@ def setup_button():
 		from misc import PowerKey
 		button = PowerKey()
 		button.powerKeyEventRegister(on_button)
-		print('Button ready: short = send now, double = pause/resume, 3 s = SOS')
+		print('Button ready: 1 click = send now, 2 clicks = SOS')
 	except Exception as e:
 		print('Button not available:', e)
 
 
 def resolve_clicks():
 	"""Called by run(): once DOUBLE_PRESS_MS has passed after the last release,
-	1 click = send now, 2 clicks or more = pause/resume"""
-	global btn_clicks, send_now_requested, paused
+	1 click = send now, 2 clicks or more = SOS"""
+	global btn_clicks, send_now_requested, sos_requested
 	if not btn_clicks or utime.ticks_diff(utime.ticks_ms(), btn_last_release) < DOUBLE_PRESS_MS:
 		return
 	if btn_clicks >= 2:
-		paused = not paused
-		print('Periodic sending %s' % ('PAUSED' if paused else 'RESUMED'))
+		sos_requested = True
+		print('SOS requested')
 	else:
 		send_now_requested = True
 	btn_clicks = 0
+	start_feedback()
 
 
 def rtc_france_time():
@@ -439,15 +485,12 @@ def build_sos_line():
 		safe(satellites_field))
 
 
-def send_line(host, port, path, line, red_led, blinks=SENT_BLINKS):
-	"""POST one line, flash the red LED if accepted; returns True on HTTP 2xx"""
+def send_line(host, port, path, line):
+	"""POST one line; returns True on HTTP 2xx"""
 	try:
 		status, _ = post_json(host, port, path, {'texte': line})
 		print('HTTP %d: %s' % (status, line))
-		if 200 <= status < 300:
-			for _ in range(blinks // SENT_BLINKS):
-				blink_sent(red_led)
-			return True
+		return 200 <= status < 300
 	except Exception as e:
 		print('POST error:', e)
 	return False
@@ -462,6 +505,8 @@ def run(config=None):
 	if config is None:
 		config = load_config()
 	host, port, path = config['server_host'], config['server_port'], config['server_path']
+	gps_interval_ms = config['gps_interval_s'] * 1000    # short line: GPS position only
+	full_interval_ms = config['full_interval_s'] * 1000  # full line: GPS + battery, network, phone
 	if not led_started:  # run() may be restarted by main.py after a crash
 		_thread.start_new_thread(led_thread, ())
 		# started before wait_network(): must work even without 4G coverage
@@ -471,12 +516,11 @@ def run(config=None):
 	wait_network()
 	uart = UART(NMEA_PORT, 9600, 8, 0, 1, 0)
 	en_pin = Pin(ENABLE_PIN, Pin.OUT, Pin.PULL_DISABLE, 1)
-	red_led = Pin(LED_RED, Pin.OUT, Pin.PULL_DISABLE, 0)
 	configure_gps(uart)
 	print('GPS on, sending GPS line every %d ms and full line every %d ms to %s:%d%s' % (
-		GPS_INTERVAL_MS, FULL_INTERVAL_MS, host, port, path))
+		gps_interval_ms, full_interval_ms, host, port, path))
 	buf = b''
-	last_gps = last_full = last_pause_blink = utime.ticks_ms()
+	last_gps = last_full = utime.ticks_ms()
 	last_sos_try = utime.ticks_add(last_gps, -SOS_RETRY_MS)  # first SOS attempt is immediate
 	try:
 		while True:
@@ -484,36 +528,33 @@ def run(config=None):
 			resolve_clicks()
 			now = utime.ticks_ms()
 
-			# SOS: sent with or without GPS fix, retried until the server accepts it
-			# (sos_requested is global, so a pending SOS survives a restart of run())
+			# SOS (2 clicks): sent with or without GPS fix, retried until the server accepts it
+			# (sos_requested is global, so a pending SOS survives a restart of run();
+			# the LED feedback lasts as long as it is pending)
 			if sos_requested and utime.ticks_diff(now, last_sos_try) >= SOS_RETRY_MS:
 				last_sos_try = now
 				print('Sending SOS')
-				if send_line(host, port, path, build_sos_line(), red_led, blinks=2 * SENT_BLINKS):
+				if send_line(host, port, path, build_sos_line()):
 					sos_requested = False
+					end_feedback()
+					flash_red(SOS_BLINKS)
 
-			# short press: full line right away (quality filter skipped: explicit request),
+			# 1 click: full line right away (quality filter skipped: explicit request),
 			# prefixed with MANUAL so the server can tell it from the periodic ones
 			if send_now_requested:
 				send_now_requested = False
-				if has_fix():
-					send_line(host, port, path, 'MANUAL,' + build_line(), red_led)
-					last_gps = last_full = now
-				else:
+				if not has_fix():
 					print('Send now: no GPS fix, nothing sent')
+					end_feedback()
+				else:
+					ok = send_line(host, port, path, 'MANUAL,' + build_line())
+					end_feedback()
+					if ok:
+						flash_red(SENT_BLINKS)
+					last_gps = last_full = now
 
-			if paused:
-				# no periodic sending; short red flash every 2 s to show the pause
-				if utime.ticks_diff(now, last_pause_blink) >= 2000:
-					last_pause_blink = now
-					red_led.write(1)
-					utime.sleep_ms(50)
-					red_led.write(0)
-				utime.sleep_ms(100)
-				continue
-
-			full_due = utime.ticks_diff(now, last_full) >= FULL_INTERVAL_MS
-			gps_due = utime.ticks_diff(now, last_gps) >= GPS_INTERVAL_MS
+			full_due = utime.ticks_diff(now, last_full) >= full_interval_ms
+			gps_due = utime.ticks_diff(now, last_gps) >= gps_interval_ms
 			if full_due or gps_due:
 				# the full line already contains the GPS fields: never send both at once
 				last_gps = now
@@ -523,7 +564,8 @@ def run(config=None):
 				if has_fix() and not good:
 					print('Imprecise position (%s), nothing sent' % reason)
 				elif has_fix():
-					send_line(host, port, path, build_line() if full_due else build_gps_line(), red_led)
+					if send_line(host, port, path, build_line() if full_due else build_gps_line()):
+						flash_red(SENT_BLINKS)
 				else:
 					print('No GPS fix, nothing sent')
 			utime.sleep_ms(100)

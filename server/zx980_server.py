@@ -7,7 +7,7 @@ Standard library only (no uvicorn/fastapi needed), replaces api.py.
 - Dashboard (local network):  http://<host>:8090/
 
 Two kinds of lines are sent by ZX980/usr/gps_post.py:
-  short (every 10 s): date,lon,lat,alt,speed,
+  short (every 3 s by default, gps_interval_s in the tracker config.json): date,lon,lat,alt,speed,
   full  (every 60 s): date,battery,fix,lon,lat,alt,speed,ip,operator,network,phone,satellites,
   (older firmware: same full line without satellites, 11 fields)
 """
@@ -80,7 +80,7 @@ def number(text, suffix):
 
 def parse_line(texte):
 	"""CSV line from gps_post.py -> dict of FIELDS (missing ones = None).
-	'SOS,' + full line (button held 3 s) -> kind 'sos'; without GPS fix its
+	'SOS,' + full line (double click on the button) -> kind 'sos'; without GPS fix its
 	position fields are '?' and stay None.
 	'MANUAL,' + full line (short press on the button) -> kind 'manual'."""
 	parts = [p.strip() for p in texte.split(',')]

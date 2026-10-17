@@ -1,5 +1,7 @@
 {
 	"server_host": "unix.server.bsd",
 	"server_port": 8080,
-	"server_path": "/message"
+	"server_path": "/message",
+	"gps_interval_s": 3,
+	"full_interval_s": 60
 }

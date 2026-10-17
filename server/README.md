@@ -44,7 +44,7 @@ With **Regrouper** (group) ticked, the default, the message table shows the whol
 - **Arrêt** (stop): start → end, duration, number of messages, battery.
 - A dashed line « Aucun message pendant … » marks a gap of more than 5 min without messages (tracker off, no GPS fix, no network).
 
-A trip starts after 2 messages in a row at 2 km/h or more, and ends after 60 s below that speed, so a traffic light does not split it. SOS, manual and raw messages always stay visible under their segment header, with a tag in the header. Click a header to unfold all the messages of the segment (loaded on demand, up to 5,000; `/api/messages?first=<id>&last=<id>`); it stays unfolded across the 5 s refreshes. Untick **Regrouper** for the flat list of the 500 latest messages; the choice is remembered in the browser.
+A trip starts after 2 messages in a row at 2 km/h or more, and ends after 60 s below that speed, so a traffic light does not split it. SOS, manual and raw messages always stay visible under their segment header, with a tag in the header. Click a header to unfold all the messages of the segment (loaded on demand, up to 5,000; `/api/messages?first=<id>&last=<id>`); it stays unfolded across the 5 s refreshes. The last unfolded segment is also shown on the map and the map zooms to it: a trip as a thick orange line, a stop as an orange ring; its header gets an orange edge and « sur la carte » (on the map). Folding it removes it from the map. Untick **Regrouper** for the flat list of the 500 latest messages; the choice is remembered in the browser.
 
 The segments are computed by the server over the whole period (`groups` in `/api/state`), not only over the 500 messages of the flat list.
 

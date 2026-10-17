@@ -36,6 +36,18 @@ Dashboard (`http://<ip>:8090/`, refreshed every 5 s, interface in French): onlin
 
 Raw data: `/api/state?hours=24` or `/api/state?from=2026-10-16T08:00&to=2026-10-16T18:00` (server time, time of reception; the page converts to and from the browser's time, which matters when FreeBSD runs in UTC). The distance only counts segments at 2 km/h or more, to ignore GPS noise while stationary.
 
+### Trips and stops in the message table
+
+With **Regrouper** (group) ticked, the default, the message table shows the whole period as folded segments, newest first:
+
+- **Trajet** (trip): start → end, duration, distance, max speed, number of messages, battery at the end.
+- **Arrêt** (stop): start → end, duration, number of messages, battery.
+- A dashed line « Aucun message pendant … » marks a gap of more than 5 min without messages (tracker off, no GPS fix, no network).
+
+A trip starts after 2 messages in a row at 2 km/h or more, and ends after 60 s below that speed, so a traffic light does not split it. SOS, manual and raw messages always stay visible under their segment header, with a tag in the header. Click a header to unfold all the messages of the segment (loaded on demand, up to 5,000; `/api/messages?first=<id>&last=<id>`); it stays unfolded across the 5 s refreshes. Untick **Regrouper** for the flat list of the 500 latest messages; the choice is remembered in the browser.
+
+The segments are computed by the server over the whole period (`groups` in `/api/state`), not only over the 500 messages of the flat list.
+
 ### Purging data
 
 Two red buttons in the header delete messages for good:

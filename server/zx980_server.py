@@ -177,14 +177,18 @@ class Store:
 		except last_seen (latest message overall, for the online badge)"""
 		rng = (start, end)
 		last_seen = self.query('SELECT MAX(received) AS r FROM messages')[0]['r']
+		rows = self.query('SELECT id, received, kind, lat, lon, speed, battery FROM messages '
+			'WHERE received BETWEEN ? AND ? ORDER BY id', rng)
+		specials = {r['id']: r for r in self.query('SELECT * FROM messages WHERE kind IN (%s) '
+			'AND received BETWEEN ? AND ? ORDER BY id DESC LIMIT 500' % ','.join('?' * len(SPECIAL_KINDS)),
+			SPECIAL_KINDS + rng)}
 		# manual and SOS lines carry the same device fields as the periodic full line
 		last_full = self.query("SELECT * FROM messages WHERE kind IN ('full', 'manual', 'sos') "
 			'AND battery IS NOT NULL AND received BETWEEN ? AND ? '
 			'ORDER BY id DESC LIMIT 1', rng)
 		last_pos = self.query('SELECT * FROM messages WHERE lat IS NOT NULL AND received BETWEEN ? AND ? '
 			'ORDER BY id DESC LIMIT 1', rng)
-		track = self.query('SELECT lat, lon, speed FROM messages '
-			'WHERE lat IS NOT NULL AND NOT (lat = 0 AND lon = 0) AND received BETWEEN ? AND ? ORDER BY id', rng)
+		track = [r for r in rows if r['lat'] is not None and not (r['lat'] == 0 and r['lon'] == 0)]
 		recent = self.query('SELECT * FROM messages WHERE received BETWEEN ? AND ? '
 			'ORDER BY id DESC LIMIT ?', rng + (limit,))
 		count = self.query('SELECT COUNT(*) AS n FROM messages WHERE received BETWEEN ? AND ?', rng)[0]['n']
@@ -206,8 +210,67 @@ class Store:
 			'track': [[t['lat'], t['lon']] for t in track],
 			'stats': {'points': len(track), 'km': round(dist, 2), 'max_speed': max(speeds, default=None)},
 			'recent': recent,
+			'groups': segments(rows, specials),
 			'count': count,
 		}
+
+	def messages(self, first, last, limit=5000):
+		"""Full rows of one segment (ids first..last), newest first"""
+		return self.query('SELECT * FROM messages WHERE id BETWEEN ? AND ? ORDER BY id DESC LIMIT ?',
+			(first, last, limit))
+
+
+SPECIAL_KINDS = ('sos', 'manual', 'other')  # always shown, even inside a folded segment
+GAP_S = 300          # no message for this long: the segment ends and a gap line is shown
+STOP_AFTER_S = 60    # a trip ends after this long below MOVING_KMH, so traffic lights do not split it
+MOVE_AFTER = 2       # a stop ends after this many messages in a row at MOVING_KMH or more
+
+
+def segments(rows, specials=None):
+	"""Messages in chronological order -> stop / trip segments, oldest first.
+	rows need id, received, kind, lat, lon, speed, battery; specials maps id -> full row."""
+	specials = specials or {}
+	times = [datetime.fromisoformat(r['received']) for r in rows]
+	# 1. moving or not, with hysteresis: a short slowdown or a single GPS jump does not cut a segment
+	moving, state, run = [], None, None  # run = index where the opposite state started
+	for i, r in enumerate(rows):
+		raw = None if r['speed'] is None or r['lat'] is None else r['speed'] >= MOVING_KMH
+		if state is None and raw is not None:
+			state = raw
+		if raw is None or raw == state:
+			run = None
+		else:
+			run = i if run is None else run
+			if (raw and i - run + 1 >= MOVE_AFTER) or (not raw and (times[i] - times[run]).total_seconds() >= STOP_AFTER_S):
+				state, moving[run:] = raw, [raw] * (i - run)
+				run = None
+		moving.append(bool(state))
+	# 2. cut on a state change or a gap
+	segs = []
+	for i, r in enumerate(rows):
+		gap = (times[i] - times[i - 1]).total_seconds() if i else 0
+		if not segs or moving[i] != moving[i - 1] or gap > GAP_S:
+			segs.append({'type': 'move' if moving[i] else 'stop', 'first_id': r['id'], 'start': r['received'],
+				'gap_before': round(gap) if gap > GAP_S else 0, 'count': 0, 'km': 0.0, 'max_speed': None,
+				'battery': None, 'specials': [], '_prev': None})
+		g = segs[-1]
+		g['last_id'], g['end'] = r['id'], r['received']
+		g['count'] += 1
+		if r['battery'] is not None:
+			g['battery'] = r['battery']
+		if r['speed'] is not None:
+			g['max_speed'] = max(g['max_speed'] or 0, r['speed'])
+		if r['lat'] is not None and not (r['lat'] == 0 and r['lon'] == 0):
+			if g['_prev'] and g['type'] == 'move':
+				g['km'] += haversine_km(g['_prev']['lat'], g['_prev']['lon'], r['lat'], r['lon'])
+			g['_prev'] = r
+		if r['id'] in specials:
+			g['specials'].append(specials[r['id']])
+	for g in segs:
+		del g['_prev']
+		g['km'] = round(g['km'], 2)
+		g['specials'].reverse()  # newest first, like the table
+	return segs
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -409,6 +472,14 @@ class WebHandler(BaseHTTPRequestHandler):
 				return self.send(400, 'text/plain; charset=utf-8', str(e).encode())
 			body = json.dumps(self.store.state(start, end, 500), ensure_ascii=False).encode()
 			return self.send(200, 'application/json; charset=utf-8', body)
+		if url.path == '/api/messages':
+			q = parse_qs(url.query)
+			try:
+				first, last = int(q['first'][0]), int(q['last'][0])
+			except (KeyError, ValueError):
+				return self.send(400, 'text/plain; charset=utf-8', 'first et last attendus'.encode())
+			body = json.dumps(self.store.messages(first, last), ensure_ascii=False).encode()
+			return self.send(200, 'application/json; charset=utf-8', body)
 		if url.path == '/api/export.csv':
 			q = parse_qs(url.query)
 			try:
@@ -510,6 +581,19 @@ table { width:100%; border-collapse:collapse; font-size:13px; font-variant-numer
 th, td { padding:6px 8px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
 th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var(--card); }
 .scroll { max-height:min(420px, 70vh); overflow:auto; }
+.msghead { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.toggle { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:13px; cursor:pointer; }
+tr.seg { cursor:pointer; }
+tr.seg td { background:color-mix(in srgb, var(--line) 45%, var(--card)); white-space:normal; padding:8px; }
+tr.seg:hover td { background:var(--line); }
+tr.seg .fold { display:inline-block; width:16px; color:var(--muted); }
+tr.seg .facts { color:var(--muted); margin:0 6px; }
+.pill { display:inline-block; font-size:11px; font-weight:700; padding:1px 8px; border-radius:99px; margin-right:8px; color:#fff; }
+.pill.move { background:var(--accent); }
+.pill.stop { background:var(--muted); }
+tr.in td:first-child { padding-left:26px; }
+tr.more td, tr.gap td { color:var(--muted); font-style:italic; text-align:center; }
+tr.gap td { border-bottom:1px dashed var(--line); font-size:12px; }
 .tag { font-size:11px; padding:1px 6px; border-radius:4px; background:var(--line); }
 .tag.full { background:var(--accent); color:#fff; }
 .tag.sos { background:var(--bad); color:#fff; font-weight:700; }
@@ -551,7 +635,8 @@ th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var
     <div class="card"><h2>Appareil</h2><dl id="dev"></dl></div>
   </div>
   <div id="map"></div>
-  <div class="card wide"><h2>Messages de la période (<span id="count">0</span>)</h2>
+  <div class="card wide"><div class="msghead"><h2>Messages de la période (<span id="count">0</span>)</h2>
+    <label class="toggle" title="Regroupe les messages en trajets et arrêts dépliables"><input type="checkbox" id="grouped" checked> Regrouper</label></div>
     <div class="scroll"><table><thead><tr>
       <th>Reçu</th><th>Type</th><th>Heure GPS</th><th>Lat</th><th>Lon</th><th>Alt</th><th>Vitesse</th>
       <th>Batt.</th><th>Fix</th><th title="utilisés / visibles · visibles par constellation">Satellites</th><th>Réseau</th><th>Opérateur</th><th>IP</th></tr></thead>
@@ -681,13 +766,84 @@ async function refresh() {
   $('count').textContent = s.count;
   last = s;
   $('purge').disabled = !s.count;
-  $('rows').innerHTML = s.recent.map(r => r.kind === 'other'
-    ? `<tr><td>${esc(tl(r.received))}</td><td><span class="tag">brut</span></td><td colspan="11">${esc(r.raw)}</td></tr>`
-    : `<tr><td>${esc(tl(r.received))}</td><td><span class="tag ${r.kind}">${r.kind}</span></td><td>${esc(t(r.device_time))}</td>
-      <td>${f(r.lat, 6)}</td><td>${f(r.lon, 6)}</td><td>${f(r.alt, 1, ' m')}</td><td>${f(r.speed, 1, ' km/h')}</td>
-      <td>${r.battery == null ? '' : r.battery + ' %' + volts(r.battery_mv, ' · ')}</td><td>${esc(r.fix)}</td>
-      <td>${r.satellites ? satCell(r.satellites) : ''}</td><td>${esc(r.network)}</td><td>${esc(r.operator)}</td><td>${esc(r.ip)}</td></tr>`).join('');
+  await loadOpenSegments(s.groups);
+  renderRows();
 }
+
+const rowHtml = (r, cls = '') => r.kind === 'other'
+  ? `<tr class="${cls}"><td>${esc(tl(r.received))}</td><td><span class="tag">brut</span></td><td colspan="11">${esc(r.raw)}</td></tr>`
+  : `<tr class="${cls}"><td>${esc(tl(r.received))}</td><td><span class="tag ${r.kind}">${r.kind}</span></td><td>${esc(t(r.device_time))}</td>
+    <td>${f(r.lat, 6)}</td><td>${f(r.lon, 6)}</td><td>${f(r.alt, 1, ' m')}</td><td>${f(r.speed, 1, ' km/h')}</td>
+    <td>${r.battery == null ? '' : r.battery + ' %' + volts(r.battery_mv, ' · ')}</td><td>${esc(r.fix)}</td>
+    <td>${r.satellites ? satCell(r.satellites) : ''}</td><td>${esc(r.network)}</td><td>${esc(r.operator)}</td><td>${esc(r.ip)}</td></tr>`;
+
+// Grouped view: stop / trip segments computed by the server over the whole period, folded by default.
+// A folded segment still shows its SOS, manual and raw messages; unfolding loads all its messages.
+const opened = new Set();   // first_id of the unfolded segments
+const details = {};         // first_id -> {last, rows}
+const grouped = () => { try { return localStorage.getItem('zx980.grouped') !== '0'; } catch (e) { return true; } };
+$('grouped').checked = grouped();
+$('grouped').onchange = () => { try { localStorage.setItem('zx980.grouped', $('grouped').checked ? '1' : '0'); } catch (e) {} renderRows(); };
+
+function duration(sec) {
+  sec = Math.max(0, Math.round(sec));
+  if (sec < 60) return sec + ' s';
+  const m = Math.round(sec / 60);
+  if (m < 60) return m + ' min';
+  const h = Math.floor(m / 60), d = Math.floor(h / 24);
+  return d ? `${d} j ${h % 24} h` : `${h} h ${String(m % 60).padStart(2, '0')}`;
+}
+const span = g => (new Date(g.end) - new Date(g.start)) / 1000;
+
+async function loadOpenSegments(groups) {
+  for (const g of groups || []) {
+    if (!opened.has(g.first_id) || (details[g.first_id] && details[g.first_id].last === g.last_id)) continue;
+    try {
+      const r = await fetch(`/api/messages?first=${g.first_id}&last=${g.last_id}`);
+      if (r.ok) details[g.first_id] = {last: g.last_id, rows: await r.json()};
+    } catch (e) {}
+  }
+}
+
+function segHtml(g) {
+  const open = opened.has(g.first_id), d0 = tl(g.start), d1 = tl(g.end);
+  const end = d0.slice(0, 10) === d1.slice(0, 10) ? d1.slice(11) : d1;
+  const facts = [duration(span(g))];
+  if (g.type === 'move') facts.push(f(g.km, 2, ' km'), 'max ' + f(g.max_speed, 0, ' km/h'));
+  facts.push(g.count + ' message' + (g.count > 1 ? 's' : ''));
+  if (g.battery != null) facts.push('batt. ' + g.battery + ' %');
+  const marks = ['sos', 'manual', 'other'].map(k => [k, g.specials.filter(r => r.kind === k).length]).filter(([, n]) => n)
+    .map(([k, n]) => `<span class="tag ${k}">${n > 1 ? n + ' × ' : ''}${k === 'other' ? 'brut' : k}</span>`).join(' ');
+  let html = `<tr class="seg ${g.type}${open ? ' open' : ''}" data-first="${g.first_id}"><td colspan="13">
+    <span class="fold">${open ? '▾' : '▸'}</span><span class="pill ${g.type}">${g.type === 'move' ? 'Trajet' : 'Arrêt'}</span>
+    <b>${esc(d0)} → ${esc(end)}</b> <span class="facts">${facts.join(' · ')}</span> ${marks}</td></tr>`;
+  const det = open && details[g.first_id];
+  if (det) {
+    html += det.rows.map(r => rowHtml(r, 'in')).join('');
+    if (det.rows.length < g.count) html += `<tr class="in more"><td colspan="13">… ${g.count - det.rows.length} messages plus anciens non affichés</td></tr>`;
+  } else {
+    html += g.specials.map(r => rowHtml(r, 'in')).join('');
+    if (open) html += '<tr class="in more"><td colspan="13">Chargement…</td></tr>';
+  }
+  if (g.gap_before) html += `<tr class="gap"><td colspan="13">Aucun message pendant ${duration(g.gap_before)}</td></tr>`;
+  return html;
+}
+
+function renderRows() {
+  if (!last) return;
+  $('rows').innerHTML = grouped() && last.groups
+    ? last.groups.slice().reverse().map(segHtml).join('')
+    : last.recent.map(r => rowHtml(r)).join('');
+}
+
+$('rows').addEventListener('click', async e => {
+  const tr = e.target.closest('tr.seg');
+  if (!tr || e.target.closest('a')) return;
+  const id = +tr.dataset.first;
+  if (opened.has(id)) opened.delete(id); else opened.add(id);
+  renderRows();
+  if (opened.has(id)) { await loadOpenSegments(last.groups); renderRows(); }
+});
 // default range: today from midnight to now
 const now = new Date();
 $('from').value = local(new Date(now.getFullYear(), now.getMonth(), now.getDate()));

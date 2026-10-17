@@ -1,52 +1,52 @@
 # ZX980 Android
 
-Application Android qui affiche le tableau de bord de [`ZX980_Server`](../ZX980_Server) : carte OpenStreetMap avec la trace, état en ligne / hors ligne, position, trajet (distance, vitesse max), batterie, réseau et messages de la période.
+Android app that shows the [`ZX980_Server`](../ZX980_Server) dashboard: OpenStreetMap map with the track, online / offline status, position, trip (distance, max speed), battery, network and the messages of the selected period.
 
-Elle lit la même API JSON que la page web (`/api/state`, port 8090, authentification HTTP Basic) et se rafraîchit toutes les 5 s. Le serveur et le traceur ne changent pas.
+It reads the same JSON API as the web page (`/api/state`, port 8090, HTTP Basic authentication) and refreshes every 5 s. The server and the tracker do not change.
 
-Kotlin, carte [osmdroid](https://github.com/osmdroid/osmdroid), Android 8.0 (API 26) minimum.
+Kotlin, [osmdroid](https://github.com/osmdroid/osmdroid) map, Android 8.0 (API 26) minimum.
 
-## Utilisation
+## Usage
 
-1. Copier `ZX980.apk` sur le téléphone et l'ouvrir (autoriser l'installation d'applications inconnues).
-2. Au premier lancement, l'écran Réglages demande :
-   - l'adresse du tableau de bord, par exemple `http://192.168.1.10:8090` (`http://` est ajouté s'il manque) ;
-   - l'identifiant et le mot de passe créés avec `--add-user`.
-3. **Enregistrer et tester** vérifie la connexion. L'engrenage en haut à droite rouvre les réglages.
+1. Copy `ZX980.apk` to the phone and open it (allow installing apps from unknown sources).
+2. On first launch, the Settings screen asks for:
+   - the dashboard address, for example `http://192.168.1.10:8090` (`http://` is added if missing);
+   - the username and password created with `--add-user`.
+3. **Enregistrer et tester** (save and test) checks the connection. The gear icon at the top right reopens the settings.
 
-Fonctions :
+Features (the app's interface is in French):
 
-| Élément | Rôle |
+| Element | Role |
 |---|---|
-| Pastille d'état | `en ligne · N s` (vert sous 30 s), `vu il y a N min` (orange sous 5 min), `hors ligne` (rouge) |
-| Menu de période | 1 h, 6 h, 24 h, 7 j, ou « Période choisie » avec les boutons du / au |
-| Carte | Trace en bleu, départ en vert, dernière position en rouge. Changer de période recadre la carte sur la trace |
-| Bouton cible | Recentre la carte sur la dernière position |
-| Ouvrir dans Maps | Ouvre la position dans l'appli de cartes du téléphone |
+| Status badge | `en ligne · N s` (online, green under 30 s), `vu il y a N min` (seen N min ago, orange under 5 min), `hors ligne` (offline, red) |
+| Period menu | 1 h, 6 h, 24 h, 7 days, or « Période choisie » (custom period) with the from / to buttons |
+| Map | Track in blue, start in green, last position in red. Changing the period fits the map to the track |
+| Target button | Centres the map on the last position |
+| Open in Maps | Opens the position in the phone's maps app |
 
-Les heures du serveur sont converties dans le fuseau du téléphone, comme sur la page web. L'heure GPS est affichée telle que le traceur l'envoie (heure de Paris).
+Server times are converted to the phone's time zone, as on the web page. The GPS time is shown as the tracker sends it (Paris time).
 
-Pas d'export CSV dans l'appli : utiliser la page web.
+No CSV export in the app: use the web page.
 
-## Accès hors du réseau local
+## Access from outside the local network
 
-Le port 8090 n'est ouvert que sur le réseau local, en HTTP. L'appli fonctionne donc en Wi-Fi à la maison. Pour l'utiliser en 4G, passer par un VPN vers la box (WireGuard sur la Freebox) plutôt que d'ouvrir le port 8090 sur internet, car le mot de passe passerait en clair.
+Port 8090 is only open on the local network, over HTTP. The app therefore works on Wi-Fi at home. To use it over 4G, go through a VPN to the router (WireGuard on the Freebox) rather than opening port 8090 to the internet, because the password would travel in clear text.
 
-Le mot de passe est enregistré dans les préférences privées de l'appli, sur le téléphone.
+The password is stored in the app's private preferences, on the phone.
 
-## Compilation
+## Build
 
-Outils installés dans `C:\Users\user\AndroidDev` : JDK Temurin 17 (`jdk17`), SDK Android (`sdk`, plateforme 35). `local.properties` (non versionné) pointe vers le SDK.
+Tools installed in `C:\Users\user\AndroidDev`: Temurin JDK 17 (`jdk17`), Android SDK (`sdk`, platform 35). `local.properties` (not versioned) points to the SDK.
 
 ```powershell
 $env:JAVA_HOME = "C:\Users\user\AndroidDev\jdk17"
 .\gradlew.bat assembleDebug
 ```
 
-L'APK est produit dans `app\build\outputs\apk\debug\app-debug.apk`. Pour mettre à jour `ZX980.apk` dans le dépôt :
+The APK is built in `app\build\outputs\apk\debug\app-debug.apk`. To update `ZX980.apk` in the repository:
 
 ```powershell
 Copy-Item app\build\outputs\apk\debug\app-debug.apk ZX980.apk
 ```
 
-Il est signé avec la clé de débogage : il s'installe directement, mais ne peut pas être publié sur le Play Store.
+It is signed with the debug key: it installs directly, but cannot be published on the Play Store.

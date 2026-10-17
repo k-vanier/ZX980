@@ -463,58 +463,84 @@ PAGE = r'''<!doctype html>
 @media (prefers-color-scheme: dark) { :root { --bg:#12151b; --card:#1b1f27; --fg:#e6e8ec; --muted:#9aa3b2; --line:#2b313c; } }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui, sans-serif; }
-header { display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--line); background:var(--card); flex-wrap:wrap; }
-header h1 { font-size:18px; margin:0; }
-#age { padding:2px 10px; border-radius:99px; font-weight:600; color:#fff; background:var(--muted); }
-header .sp { flex:1; }
-#range { display:inline-flex; gap:8px; flex-wrap:wrap; align-items:center; }
-select, input, .btn { font:inherit; cursor:pointer; padding:4px 8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--fg); text-decoration:none; }
+header { display:flex; align-items:center; gap:10px 16px; padding:12px 16px; border-bottom:1px solid var(--line); background:var(--card); flex-wrap:wrap; }
+header h1 { font-size:18px; margin:0; white-space:nowrap; }
+.status { display:flex; align-items:center; gap:8px 12px; flex-wrap:wrap; min-width:0; }
+#age { padding:2px 10px; border-radius:99px; font-weight:600; color:#fff; background:var(--muted); white-space:nowrap; }
+.controls { display:flex; align-items:center; gap:8px 12px; flex-wrap:wrap; margin-left:auto; }
+.controls > div { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.controls label { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+select, input, .btn { font:inherit; cursor:pointer; padding:4px 8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--fg); text-decoration:none; white-space:nowrap; }
 .btn.danger { color:var(--bad); border-color:var(--bad); }
 .btn.danger:hover { background:var(--bad); color:#fff; }
 .btn:disabled { opacity:.5; cursor:default; }
 a { color:var(--accent); }
 @media (prefers-color-scheme: dark) { a { color:#60a5fa; } }
-main { display:grid; grid-template-columns: 340px 1fr; gap:16px; padding:16px; }
-@media (max-width: 860px) { main { grid-template-columns: 1fr; } }
-.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
+main { display:grid; grid-template-columns: 340px minmax(0, 1fr); grid-template-areas: "side map" "msgs msgs"; gap:16px; padding:16px; align-items:start; }
+/* grid items default to min-width:auto: without this the wide table stretches the whole page */
+main > * { min-width:0; }
+.side { grid-area:side; display:flex; flex-direction:column; gap:16px; }
+#map { grid-area:map; height:clamp(320px, 62vh, 560px); border-radius:10px; border:1px solid var(--line); }
+.wide { grid-area:msgs; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; min-width:0; }
 .card h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 10px; }
-dl { display:grid; grid-template-columns: auto 1fr; gap:6px 12px; margin:0; }
-dt { color:var(--muted); } dd { margin:0; font-variant-numeric:tabular-nums; text-align:right; }
-#map { height:520px; border-radius:10px; border:1px solid var(--line); }
-.side { display:flex; flex-direction:column; gap:16px; }
+dl { display:grid; grid-template-columns: auto minmax(0, 1fr); gap:6px 12px; margin:0; }
+dt { color:var(--muted); } dd { margin:0; font-variant-numeric:tabular-nums; text-align:right; overflow-wrap:anywhere; }
+/* tablet: map on top, the three cards side by side */
+@media (max-width: 900px) {
+  main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "map" "side" "msgs"; }
+  .side { display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  #map { height:clamp(280px, 50vh, 460px); }
+}
+/* phone: full-width controls, tighter spacing */
+@media (max-width: 600px) {
+  header { padding:10px 12px; }
+  .controls, .controls > div { width:100%; margin-left:0; }
+  .controls label { flex:1 1 100%; }
+  .controls select, .controls input { flex:1; min-width:0; }
+  .controls .btn { flex:1 1 auto; text-align:center; }
+  main { padding:10px; gap:10px; }
+  .side { gap:10px; }
+  .card { padding:12px; }
+  th, td { padding:5px 6px; }
+}
 .bar { height:8px; background:var(--line); border-radius:4px; overflow:hidden; margin-top:4px; }
 .bar > div { height:100%; background:var(--ok); }
 table { width:100%; border-collapse:collapse; font-size:13px; font-variant-numeric:tabular-nums; }
 th, td { padding:6px 8px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
 th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var(--card); }
-.wide { grid-column:1 / -1; }
-.scroll { max-height:420px; overflow:auto; }
+.scroll { max-height:min(420px, 70vh); overflow:auto; }
 .tag { font-size:11px; padding:1px 6px; border-radius:4px; background:var(--line); }
 .tag.full { background:var(--accent); color:#fff; }
 .tag.sos { background:var(--bad); color:#fff; font-weight:700; }
 .tag.manual { background:#db2777; color:#fff; }
-#sos { display:none; background:var(--bad); color:#fff; font-weight:700; padding:4px 10px; border-radius:6px; }
+#sos { display:none; background:var(--bad); color:#fff; font-weight:700; padding:4px 10px; border-radius:6px; overflow-wrap:anywhere; }
 #sos a { color:#fff; }
 </style>
 </head>
 <body>
 <header>
-  <h1>ZX980 Tracker</h1>
-  <span id="age">—</span>
-  <span id="sos"></span>
-  <span class="sp"></span>
-  <label>Trace <select id="hours">
-    <option value="1">1 h</option><option value="6">6 h</option>
-    <option value="24" selected>24 h</option><option value="168">7 j</option>
-    <option value="custom">Période choisie</option></select></label>
-  <span id="range">
-    <label>du <input type="datetime-local" id="from"></label>
-    <label>au <input type="datetime-local" id="to"></label>
-    <button id="show" class="btn">Afficher</button>
-  </span>
-  <a class="btn" id="csv" href="/api/export.csv">Export CSV</a>
-  <button id="purge" class="btn danger" title="Supprime les messages de la période affichée">Purger la période</button>
-  <button id="purgeAll" class="btn danger" title="Supprime tous les messages de la base">Tout purger</button>
+  <div class="status">
+    <h1>ZX980 Tracker</h1>
+    <span id="age">—</span>
+    <span id="sos"></span>
+  </div>
+  <div class="controls">
+    <div id="range">
+      <label>Trace <select id="hours">
+        <option value="1">1 h</option><option value="6">6 h</option>
+        <option value="24" selected>24 h</option><option value="168">7 j</option>
+        <option value="custom">Période choisie</option></select></label>
+      <label>du <input type="datetime-local" id="from"></label>
+      <label>au <input type="datetime-local" id="to"></label>
+      <button id="show" class="btn">Afficher</button>
+    </div>
+    <div>
+      <a class="btn" id="csv" href="/api/export.csv">Export CSV</a>
+      <button id="purge" class="btn danger" title="Supprime les messages de la période affichée">Purger la période</button>
+      <button id="purgeAll" class="btn danger" title="Supprime tous les messages de la base">Tout purger</button>
+    </div>
+  </div>
 </header>
 <main>
   <div class="side">

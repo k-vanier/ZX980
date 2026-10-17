@@ -81,13 +81,15 @@ def number(text, suffix):
 def parse_line(texte):
 	"""CSV line from gps_post.py -> dict of FIELDS (missing ones = None).
 	'SOS,' + full line (button held 3 s) -> kind 'sos'; without GPS fix its
-	position fields are '?' and stay None."""
+	position fields are '?' and stay None.
+	'MANUAL,' + full line (short press on the button) -> kind 'manual'."""
 	parts = [p.strip() for p in texte.split(',')]
 	if parts and parts[-1] == '':
 		parts.pop()
-	if parts and parts[0] == 'SOS':
+	prefixes = {'SOS': 'sos', 'MANUAL': 'manual'}
+	if parts and parts[0] in prefixes:
 		out = parse_fields(parts[1:])
-		out['kind'] = 'sos'
+		out['kind'] = prefixes[parts[0]]
 		return out
 	return parse_fields(parts)
 
@@ -175,7 +177,9 @@ class Store:
 		except last_seen (latest message overall, for the online badge)"""
 		rng = (start, end)
 		last_seen = self.query('SELECT MAX(received) AS r FROM messages')[0]['r']
-		last_full = self.query("SELECT * FROM messages WHERE kind='full' AND received BETWEEN ? AND ? "
+		# manual and SOS lines carry the same device fields as the periodic full line
+		last_full = self.query("SELECT * FROM messages WHERE kind IN ('full', 'manual', 'sos') "
+			'AND battery IS NOT NULL AND received BETWEEN ? AND ? '
 			'ORDER BY id DESC LIMIT 1', rng)
 		last_pos = self.query('SELECT * FROM messages WHERE lat IS NOT NULL AND received BETWEEN ? AND ? '
 			'ORDER BY id DESC LIMIT 1', rng)
@@ -479,6 +483,7 @@ th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var
 .tag { font-size:11px; padding:1px 6px; border-radius:4px; background:var(--line); }
 .tag.full { background:var(--accent); color:#fff; }
 .tag.sos { background:var(--bad); color:#fff; font-weight:700; }
+.tag.manual { background:#db2777; color:#fff; }
 #sos { display:none; background:var(--bad); color:#fff; font-weight:700; padding:4px 10px; border-radius:6px; }
 #sos a { color:#fff; }
 </style>

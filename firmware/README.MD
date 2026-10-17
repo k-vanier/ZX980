@@ -1,77 +1,77 @@
-# ZX980 — traceur GPS ZX908 / Quectel EC800M
+# ZX980 — ZX908 / Quectel EC800M GPS tracker
 
-Firmware QuecPython pour le boîtier traceur **ZX908** équipé d'un module 4G **Quectel EC800M-CNLE**. Au démarrage, le traceur lit sa position GPS et l'envoie en HTTP à un serveur. Ce serveur stocke les positions et les affiche sur une carte : voir [`ZX980_Server`](../ZX980_Server).
+QuecPython firmware for the **ZX908** tracker box fitted with a **Quectel EC800M-CNLE** 4G module. At startup, the tracker reads its GPS position and sends it over HTTP to a server. The server stores the positions and shows them on a map: see [`ZX980_Server`](../ZX980_Server).
 
-Ce projet est adapté de [FoxExe/ZX908](https://github.com/FoxExe/ZX908), écrit à l'origine pour l'EC800N.
+This project is adapted from [FoxExe/ZX908](https://github.com/FoxExe/ZX908), originally written for the EC800N.
 
-![ZX908 avec sa batterie, face GPS](Images/WhatsApp2.jpeg)
+![ZX908 with its battery, GPS side](Images/WhatsApp2.jpeg)
 
-## Fonctionnement
+## How it works
 
-1. Au démarrage, `main.py` lance `gps_post.py` dans un thread : le REPL de QPYcom reste utilisable.
-2. Le script attend la connexion 4G (APN Free `free`), allume le GPS et lit les trames NMEA.
-3. Si le GPS a une position, il envoie au serveur :
-   - **toutes les 10 s**, une ligne courte : la position ;
-   - **toutes les 60 s**, une ligne complète : la position, plus l'état de l'appareil et du réseau.
-4. Les LEDs indiquent l'état : 🟡 jaune pour le GPS, 🔴 rouge pour chaque envoi.
-5. Si le script plante, il redémarre au bout de 10 s.
+1. At startup, `main.py` runs `gps_post.py` in a thread, so the QPYcom REPL stays usable.
+2. The script waits for the 4G connection (Free APN `free`), powers on the GPS and reads the NMEA sentences.
+3. When the GPS has a position, it sends to the server:
+   - **every 10 s**, a short line: the position;
+   - **every 60 s**, a full line: the position plus the device and network status.
+4. The LEDs show the status: 🟡 yellow for the GPS, 🔴 red for each message sent.
+5. If the script crashes, it restarts after 10 s.
 
-### Messages envoyés
+### Messages sent
 
-Requête `POST http://<server_host>:<server_port><server_path>` (réglés dans [`usr/config.json`](usr/config.json)), avec le corps JSON `{"texte": "<ligne CSV>"}`.
+Request `POST http://<server_host>:<server_port><server_path>` (set in [`usr/config.json`](usr/config.json)), with the JSON body `{"texte": "<CSV line>"}`.
 
-**Ligne courte (toutes les 10 s), 5 champs :**
+**Short line (every 10 s), 5 fields:**
 
 ```
 datefrance,posX,posY,altitude,vitesse,
 16/10/2026 19:40:39,0°13'36.0"E,49°08'48.0"N,45.2m,0.0km/h,
 ```
 
-**Ligne complète (toutes les 60 s, à la place de la ligne courte), 12 champs :**
+**Full line (every 60 s, instead of the short line), 12 fields:**
 
 ```
 datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vitesse,IP,operator,signal,telephone,satellites,
 16/10/2026 19:40:39,100%(4165mV),3D,0°13'36.0"E,49°08'48.0"N,45.2m,0.0km/h,10.126.248.157,Free,4G -78dBm,+33600000000,7/12(BD4+GP8),
 ```
 
-| Champ | Source | Détail |
+| Field | Source | Details |
 |---|---|---|
-| `datefrance` | GPS (RMC) | Heure UTC convertie en heure de Paris, avec le changement d'heure été/hiver |
-| `niveaubat` | `Power.getVbatt()` | Pourcentage calculé à partir de la tension, suivi de la tension mesurée : `100%(4165mV)`. Moyenne de 5 mesures. Environ 100 % quand l'USB est branché |
-| `fix2Dou3D` | GPS (GSA) | `2D`, `3D`, ou `?` si inconnu |
-| `posX` / `posY` | GPS (RMC) | Longitude puis latitude, en degrés, minutes et secondes |
-| `altitude` | GPS (GGA) | En mètres |
-| `vitesse` | GPS (RMC) | En km/h |
-| `IP` | `dataCall.getInfo()` | Adresse IP mobile (privée, derrière le CGNAT de Free) |
-| `operator` | `net.operatorName()` | Nom de l'opérateur |
-| `signal` | `net.getNetMode()`, `net.getSignal()` | Technologie (`4G`/`3G`/`2G`) et RSSI en dBm |
-| `telephone` | `sim.getPhoneNumber()` | Numéro enregistré sur la carte SIM |
-| `satellites` | GPS (GGA, GSV) | `utilisés/vus(détail)`. Exemple : `7/12(BD4+GP8)` = 7 satellites utilisés pour la position, 12 visibles, dont 4 BeiDou (`BD`) et 8 GPS (`GP`). `GL` = GLONASS, `GA` = Galileo |
+| `datefrance` | GPS (RMC) | UTC time converted to Paris time, including the summer/winter time change |
+| `niveaubat` | `Power.getVbatt()` | Percentage computed from the voltage, followed by the measured voltage: `100%(4165mV)`. Average of 5 readings. About 100 % while USB is plugged in |
+| `fix2Dou3D` | GPS (GSA) | `2D`, `3D`, or `?` if unknown |
+| `posX` / `posY` | GPS (RMC) | Longitude then latitude, in degrees, minutes and seconds |
+| `altitude` | GPS (GGA) | In metres |
+| `vitesse` | GPS (RMC) | Speed in km/h |
+| `IP` | `dataCall.getInfo()` | Mobile IP address (private, behind Free's CGNAT) |
+| `operator` | `net.operatorName()` | Operator name |
+| `signal` | `net.getNetMode()`, `net.getSignal()` | Technology (`4G`/`3G`/`2G`) and RSSI in dBm |
+| `telephone` | `sim.getPhoneNumber()` | Number stored on the SIM card |
+| `satellites` | GPS (GGA, GSV) | `used/in view(details)`. Example: `7/12(BD4+GP8)` = 7 satellites used for the fix, 12 in view, of which 4 BeiDou (`BD`) and 8 GPS (`GP`). `GL` = GLONASS, `GA` = Galileo |
 
-Rien n'est envoyé tant que le GPS n'a pas de position. Consommation : environ 10 Mo par jour, soit 300 à 350 Mo par mois en continu. Chaque message coûte environ 1,1 Ko, car il inclut une recherche DNS et une connexion TCP complète, alors que la ligne CSV ne fait qu'environ 75 octets.
+Nothing is sent until the GPS has a position. Data usage: about 10 MB per day, i.e. 300 to 350 MB per month when running continuously. Each message costs about 1.1 KB, because it includes a DNS lookup and a full TCP connection, whereas the CSV line itself is only about 75 bytes.
 
 ### LEDs
 
-| LED | GPIO | Comportement |
+| LED | GPIO | Behaviour |
 |---|---|---|
-| 🟡 Jaune (orange sur la carte) | GPIO17 | Clignote vite (4 Hz) quand le GPS a une position, éteinte sinon |
-| 🔴 Rouge | GPIO15 | 3 flashs rapides à chaque message accepté par le serveur (HTTP 2xx) |
-| 🔵 Bleue | GPIO16 | Non utilisée par le code |
+| 🟡 Yellow (orange on the board) | GPIO17 | Blinks fast (4 Hz) when the GPS has a position, off otherwise |
+| 🔴 Red | GPIO15 | 3 quick flashes for each message accepted by the server (HTTP 2xx) |
+| 🔵 Blue | GPIO16 | Not used by the code |
 
-## Contenu du dossier `usr/`
+## Contents of the `usr/` folder
 
-Tout le dossier se copie dans `/usr` sur le module.
+Copy the whole folder to `/usr` on the module.
 
-### Programme principal
+### Main program
 
-| Fichier | Rôle |
+| File | Role |
 |---|---|
-| `main.py` | Lancé automatiquement au démarrage : exécute `gps_post.run()` dans un thread et le relance en cas de plantage |
-| `gps_post.py` | Lecture du GPS, construction des lignes CSV, envoi périodique, gestion des LEDs |
-| `post_message.py` | Fonction `post_json()` : requête POST JSON en HTTP, adaptée aux particularités de QuecPython. Fonction `load_config()` : lecture de `config.json` |
-| `config.json` | Adresse du serveur API (voir ci-dessous) |
+| `main.py` | Runs automatically at startup: runs `gps_post.run()` in a thread and restarts it if it crashes |
+| `gps_post.py` | Reads the GPS, builds the CSV lines, sends them periodically, drives the LEDs |
+| `post_message.py` | `post_json()`: HTTP POST of a JSON body, adapted to QuecPython's quirks. `load_config()`: reads `config.json` |
+| `config.json` | API server address (see below) |
 
-### Adresse du serveur : `config.json`
+### Server address: `config.json`
 
 ```json
 {
@@ -81,136 +81,136 @@ Tout le dossier se copie dans `/usr` sur le module.
 }
 ```
 
-`main.py`, `gps_post.py` et `post_message.py` lisent ce fichier. Pour changer de serveur, modifiez `/usr/config.json` sur le module et redémarrez : le code ne change pas. Si le fichier est absent ou invalide, le script affiche un message et utilise les valeurs ci-dessus. Au démarrage, `main.py` affiche l'adresse utilisée (`Server: ...`).
+`main.py`, `gps_post.py` and `post_message.py` read this file. To change server, edit `/usr/config.json` on the module and restart: the code does not change. If the file is missing or invalid, the script prints a message and uses the values above. At startup, `main.py` prints the address in use (`Server: ...`).
 
-### Autres réglages (en haut de `gps_post.py`)
+### Other settings (top of `gps_post.py`)
 
-| Constante | Défaut | Rôle |
+| Constant | Default | Role |
 |---|---|---|
-| `GPS_INTERVAL_MS` | `10000` | Intervalle de la ligne courte |
-| `FULL_INTERVAL_MS` | `60000` | Intervalle de la ligne complète |
-| `SENT_BLINKS` | `3` | Nombre de flashs rouges par envoi |
-| `FIX_BLINK_MS` | `125` | Vitesse de clignotement de la LED jaune |
-| `FIX_TIMEOUT_MS` | `5000` | Délai sans trame RMC valide au-delà duquel la position est considérée comme perdue |
-| `LOW_BATTERY_MV` | `3500` | Seuil de coupure batterie faible (mV) |
-| `LOW_BATTERY_CHECKS` | `3` | Nombre de mesures basses consécutives avant la coupure |
-| `BATTERY_CHECK_MS` | `30000` | Intervalle entre deux vérifications de la batterie |
+| `GPS_INTERVAL_MS` | `10000` | Short line interval |
+| `FULL_INTERVAL_MS` | `60000` | Full line interval |
+| `SENT_BLINKS` | `3` | Number of red flashes per message sent |
+| `FIX_BLINK_MS` | `125` | Yellow LED blink speed |
+| `FIX_TIMEOUT_MS` | `5000` | Time without a valid RMC sentence after which the position is considered lost |
+| `LOW_BATTERY_MV` | `3500` | Low battery shutdown threshold (mV) |
+| `LOW_BATTERY_CHECKS` | `3` | Number of consecutive low readings before shutdown |
+| `BATTERY_CHECK_MS` | `30000` | Interval between two battery checks |
 
-### Scripts de test et de diagnostic
+### Test and diagnostic scripts
 
-Chaque script se lance depuis le REPL de QPYcom avec :
+Run each script from the QPYcom REPL with:
 
 ```python
 exec(open('/usr/<script>.py').read())
 ```
 
-Pendant les tests GPS, renommez `main.py`, sinon `gps_post` utilise le GPS en même temps.
+During GPS tests, rename `main.py`, otherwise `gps_post` uses the GPS at the same time.
 
-| Script | Rôle |
+| Script | Role |
 |---|---|
-| `check_ec800m.py` | Vérifie le modèle, le firmware et les modules QuecPython, allume les 3 LEDs et teste la réception NMEA |
-| `device_info.py` | Affiche tout ce que le module sait remonter : module, batterie, SIM, réseau, cellules, Wi-Fi, satellites |
-| `scan_wifi_gps.py` | Scan Wi-Fi (MAC + RSSI), puis affichage des trames NMEA en continu |
-| `sms_ping.py` | Règle l'APN `free`, tente un SMS, puis fait un ping de google.com (numéro à mettre dans `PHONE`) |
-| `test_GNSS.py`, `test_UART.py`, `test_gpio.py` | Tests du GPS, des UART et des GPIO (scripts d'origine FoxExe) |
-| `i2c_scanner.py`, `i2c_test.py` | Scan et lecture du bus I2C0 (composants inconnus aux adresses 0x62 et 0xE2) |
-| `inspect_all.py`, `test_fullinfo.py` | Inventaire des modules et des informations du firmware (scripts d'origine FoxExe) |
+| `check_ec800m.py` | Checks the model, firmware and QuecPython modules, lights the 3 LEDs and tests NMEA reception |
+| `device_info.py` | Prints everything the module can report: module, battery, SIM, network, cells, Wi-Fi, satellites |
+| `scan_wifi_gps.py` | Wi-Fi scan (MAC + RSSI), then continuous display of the NMEA sentences |
+| `sms_ping.py` | Sets the `free` APN, tries an SMS, then pings google.com (number to set in `PHONE`) |
+| `test_GNSS.py`, `test_UART.py`, `test_gpio.py` | GPS, UART and GPIO tests (original FoxExe scripts) |
+| `i2c_scanner.py`, `i2c_test.py` | I2C0 bus scan and read (unknown chips at addresses 0x62 and 0xE2) |
+| `inspect_all.py`, `test_fullinfo.py` | Inventory of the firmware's modules and information (original FoxExe scripts) |
 
 ## Installation
 
-1. **Firmware :** flasher [`Firmware/QPY_OCPU_V0005_EC800M_CNLE_FW.bin`](Firmware/QPY_OCPU_V0005_EC800M_CNLE_FW.bin) avec [QPYcom](https://python.quectel.com/en/wp-content/uploads/sites/2/2024/11/QPYcom_V3.6.0.zip). Installer d'abord les [pilotes USB Quectel](https://python.quectel.com/wp-content/uploads/2024/09/Quectel_Windows_USB_DriverA_Customer_V1.1.13.zip).
-2. **Code :** régler l'adresse du serveur dans `usr/config.json`, puis copier tout le contenu de `usr/` (avec `config.json`) dans `/usr` sur le module, dans l'onglet Fichier de QPYcom.
-3. **Vérification :** lancer `check_ec800m.py` depuis le REPL.
-4. **Démarrage :** redémarrer le module. L'envoi commence dès que la 4G est connectée et que le GPS a une position.
+1. **Firmware:** flash [`Firmware/QPY_OCPU_V0005_EC800M_CNLE_FW.bin`](Firmware/QPY_OCPU_V0005_EC800M_CNLE_FW.bin) with [QPYcom](https://python.quectel.com/en/wp-content/uploads/sites/2/2024/11/QPYcom_V3.6.0.zip). Install the [Quectel USB drivers](https://python.quectel.com/wp-content/uploads/2024/09/Quectel_Windows_USB_DriverA_Customer_V1.1.13.zip) first.
+2. **Code:** set the server address in `usr/config.json`, then copy the whole content of `usr/` (including `config.json`) to `/usr` on the module, from the File tab of QPYcom.
+3. **Check:** run `check_ec800m.py` from the REPL.
+4. **Start:** restart the module. Sending starts as soon as 4G is connected and the GPS has a position.
 
-Pour désactiver le lancement automatique, supprimez ou renommez `/usr/main.py`.
+To disable the automatic start, delete or rename `/usr/main.py`.
 
-`Firmware/Tracker_fw_alpha.bin` est le firmware complet d'origine de FoxExe pour l'**EC800N**. Ne le flashez pas sur un EC800M.
+`Firmware/Tracker_fw_alpha.bin` is FoxExe's original full firmware for the **EC800N**. Do not flash it on an EC800M.
 
-## Matériel
+## Hardware
 
-| Élément | Valeur |
+| Item | Value |
 |---|---|
 | Module | Quectel EC800M-CNLE (LTE Cat 1) |
-| Firmware | `QPY_OCPU_V0005_EC800M_CNLE_FW` : QuecPython V0005, MicroPython 1.13, environ 950 Ko de RAM libre, environ 540 Ko libres dans `/usr` |
-| GPS | AT6558R (CASIC), GPS + BeiDou, UART2 à 9600 bauds ([fiche technique](docs/at6558.pdf)) |
-| Antenne GPS | Céramique passive. La puce affiche toujours `ANTENNA OPEN`, ce qui est normal. |
-| Batterie | LiPo 1S avec connecteur JST |
-| Opérateur testé | Free Mobile, APN `free` |
+| Firmware | `QPY_OCPU_V0005_EC800M_CNLE_FW`: QuecPython V0005, MicroPython 1.13, about 950 KB of free RAM, about 540 KB free in `/usr` |
+| GPS | AT6558R (CASIC), GPS + BeiDou, UART2 at 9600 baud ([datasheet](docs/at6558.pdf)) |
+| GPS antenna | Passive ceramic. The chip always reports `ANTENNA OPEN`, which is normal. |
+| Battery | 1S LiPo with JST connector |
+| Tested operator | Free Mobile, APN `free` |
 
-Le bouton d'alimentation est relié à un circuit dédié : un appui court allume, un appui long (plus de 10 s) éteint. Le bouton reset coupe l'alimentation.
+The power button is wired to a dedicated circuit: a short press turns the device on, a long press (more than 10 s) turns it off. The reset button cuts the power.
 
-### Brochage
+### Pinout
 
-Le brochage de l'EC800M est **identique à celui de l'EC800N** pour toutes les broches utilisées. Seul le firmware change.
+The EC800M pinout is **identical to the EC800N** for all the pins used. Only the firmware changes.
 
-| GPIO | Broche | Fonctions | Usage sur le ZX908 |
+| GPIO | Pin | Functions | Use on the ZX908 |
 |---|---|---|---|
-| GPIO1 à 4 | 30 à 33 | PCM / SPI0 | Port latéral n° 3 à 6 |
-| GPIO10 | 54 | CAM_MCLK | Alimentation du GPS |
-| GPIO15 | 80 | CAM_SPI_CLK | LED rouge |
-| GPIO16 | 81 | CAM_PWDN | LED bleue |
-| GPIO17 | 76 | KP_MKOUT_2 | LED jaune (orange) |
-| GPIO23 / 24 | 66 / 67 | I2C0 SDA / SCL | Composants inconnus à 0x62 et 0xE2 |
-| GPIO25 / 26 | 17 / 18 | UART2 RX / TX | TX / RX du GPS |
-| GPIO32 / 33 | 28 / 29 | UART1 RX / TX | UART auxiliaire |
-| GPIO34 / 35 | 38 / 39 | UART0 RX / TX | UART de débogage |
+| GPIO1 to 4 | 30 to 33 | PCM / SPI0 | Side port no. 3 to 6 |
+| GPIO10 | 54 | CAM_MCLK | GPS power |
+| GPIO15 | 80 | CAM_SPI_CLK | Red LED |
+| GPIO16 | 81 | CAM_PWDN | Blue LED |
+| GPIO17 | 76 | KP_MKOUT_2 | Yellow (orange) LED |
+| GPIO23 / 24 | 66 / 67 | I2C0 SDA / SCL | Unknown chips at 0x62 and 0xE2 |
+| GPIO25 / 26 | 17 / 18 | UART2 RX / TX | GPS TX / RX |
+| GPIO32 / 33 | 28 / 29 | UART1 RX / TX | Auxiliary UART |
+| GPIO34 / 35 | 38 / 39 | UART0 RX / TX | Debug UART |
 | GPIO36 | 16 | NET_STATUS / PWM2 | — |
 
-Sources : documentation QuecPython [machine.Pin](https://developer.quectel.com/doc/quecpython/API_reference/en/peripherals/machine.Pin.html), [machine.UART](https://developer.quectel.com/doc/quecpython/API_reference/en/peripherals/machine.UART.html) et [machine.I2C](https://developer.quectel.com/doc/quecpython/API_reference/en/peripherals/machine.I2C.html).
+Sources: QuecPython documentation for [machine.Pin](https://developer.quectel.com/doc/quecpython/API_reference/en/peripherals/machine.Pin.html), [machine.UART](https://developer.quectel.com/doc/quecpython/API_reference/en/peripherals/machine.UART.html) and [machine.I2C](https://developer.quectel.com/doc/quecpython/API_reference/en/peripherals/machine.I2C.html).
 
 ## Photos
 
 | | |
 |---|---|
-| ![ZX908 avec sa batterie, face arrière](Images/WhatsApp1.jpeg) | ![ZX908 avec sa batterie, face GPS](Images/WhatsApp2.jpeg) |
-| Face arrière (bouton, LED bleue) et batterie LiPo | Face avant : antenne GPS céramique, support SIM, LEDs |
+| ![ZX908 with its battery, back side](Images/WhatsApp1.jpeg) | ![ZX908 with its battery, GPS side](Images/WhatsApp2.jpeg) |
+| Back side (button, blue LED) and LiPo battery | Front side: ceramic GPS antenna, SIM holder, LEDs |
 
-![Brochage de la carte ZX908](Images/ZX908.jpg)
+![ZX908 board pinout](Images/ZX908.jpg)
 
-*Brochage de la carte : USB (GND, DP, DM, +5 V), port latéral (GND, PWR_BTN, GPIO1 à 4), batterie, haut-parleur et LEDs. Photo FoxExe, avec la version EC800N du module.*
+*Board pinout: USB (GND, DP, DM, +5 V), side port (GND, PWR_BTN, GPIO1 to 4), battery, speaker and LEDs. Photo by FoxExe, with the EC800N version of the module.*
 
 | | |
 |---|---|
-| ![Puce GPS AT6558](Images/chips_gps.jpg) | ![Puces près du connecteur USB](Images/chips_audio.jpg) |
-| Puce GPS AT6558R | Puce GPS et puce audio près du connecteur USB |
+| ![AT6558 GPS chip](Images/chips_gps.jpg) | ![Chips near the USB connector](Images/chips_audio.jpg) |
+| AT6558R GPS chip | GPS chip and audio chip near the USB connector |
 
-![Amplificateur audio 8987S](Images/Audio_codec.jpg)
+![8987S audio amplifier](Images/Audio_codec.jpg)
 
-*Puce audio marquée 8987S (amplificateur pour le haut-parleur).*
+*Audio chip marked 8987S (speaker amplifier).*
 
-## Limites connues
+## Known limitations
 
-- **Pas de SMS :** le firmware V0005 CNLE n'a pas de module `sms`, et les commandes AT SMS renvoient `ERROR`. C'est le dernier firmware public. Il faut demander au support Quectel une version qui contient `sms` ([fil du forum](https://forums.quectel.com/t/missing-the-sms-module-in-ec800mcnler06a05m08/59369)).
-- **Pas d'appels :** pas de module `voiceCall`.
-- **Pas d'accès distant direct (SSH…) :** le module a une IP privée derrière le CGNAT de Free, donc c'est toujours lui qui se connecte au serveur.
-- **HTTP en clair, sans authentification :** la position et le numéro de téléphone circulent en clair. QuecPython gère HTTPS/TLS 1.2 (`ussl`) si besoin.
-- **Batterie :** le pourcentage n'est fiable que sur batterie seule. Le chargeur USB fait remonter la tension.
+- **No SMS:** the V0005 CNLE firmware has no `sms` module, and the AT SMS commands return `ERROR`. It is the latest public firmware. A version that includes `sms` has to be requested from Quectel support ([forum thread](https://forums.quectel.com/t/missing-the-sms-module-in-ec800mcnler06a05m08/59369)).
+- **No calls:** no `voiceCall` module.
+- **No direct remote access (SSH…):** the module has a private IP behind Free's CGNAT, so it is always the module that connects to the server.
+- **Plain HTTP, no authentication:** the position and the phone number travel in clear text. QuecPython supports HTTPS/TLS 1.2 (`ussl`) if needed.
+- **Battery:** the percentage is only reliable on battery alone. The USB charger raises the voltage.
 
-### Coupure batterie faible
+### Low battery shutdown
 
-Un thread vérifie la batterie toutes les 30 s (`BATTERY_CHECK_MS`). Si la tension reste sous **3 500 mV** (`LOW_BATTERY_MV`) pendant **3 mesures de suite** (`LOW_BATTERY_CHECKS`, soit environ 1 min 30), le module éteint le GPS puis s'éteint lui-même (`Power.powerDown()`), pour protéger la batterie LiPo d'une décharge profonde.
+A thread checks the battery every 30 s (`BATTERY_CHECK_MS`). If the voltage stays below **3,500 mV** (`LOW_BATTERY_MV`) for **3 readings in a row** (`LOW_BATTERY_CHECKS`, i.e. about 1 min 30 s), the module turns off the GPS and then shuts itself down (`Power.powerDown()`), to protect the LiPo battery from deep discharge.
 
-- La vérification ne s'applique pas quand l'USB est branché (la batterie est en charge).
-- Chaque mesure est une moyenne de 5 lectures, et il en faut 3 basses à la suite : une chute brève pendant une émission 4G ne suffit pas à éteindre le module.
-- Pour le rallumer : bouton d'alimentation, ou branchement du chargeur selon la carte.
+- The check does not apply while USB is plugged in (the battery is charging).
+- Each reading is an average of 5 measurements, and 3 low readings in a row are needed: a short drop during a 4G transmission is not enough to shut the module down.
+- To turn it back on: power button, or plugging in the charger depending on the board.
 
-## Particularités de QuecPython V0005
+## QuecPython V0005 quirks
 
-- MicroPython 1.13 n'a pas `bytes.partition()` : utiliser `find()`.
-- `recv()` lève `OSError` 107 (`ENOTCONN`) au lieu de renvoyer `b''` quand le serveur ferme la connexion.
-- Un `settimeout()` avant `connect()` masque les échecs de connexion, qui n'apparaissent qu'ensuite sous forme de `ENOTCONN` sur `send()`.
-- `Content-Length` doit compter les octets UTF-8 : `°` fait 2 octets.
-- `net.getServingMcc()` et `getServingMnc()` renvoient du BCD lu en hexadécimal (`520` = `0x208` = France).
-- `dataCall.activate()` renvoie un échec si la connexion data est déjà active, sans conséquence.
+- MicroPython 1.13 has no `bytes.partition()`: use `find()`.
+- `recv()` raises `OSError` 107 (`ENOTCONN`) instead of returning `b''` when the server closes the connection.
+- A `settimeout()` before `connect()` hides connection failures, which only show up later as `ENOTCONN` on `send()`.
+- `Content-Length` must count UTF-8 bytes: `°` is 2 bytes.
+- `net.getServingMcc()` and `getServingMnc()` return BCD read as hexadecimal (`520` = `0x208` = France).
+- `dataCall.activate()` reports a failure if the data connection is already active, with no consequence.
 
-## Liens
+## Links
 
-- [Documentation de l'API QuecPython](https://developer.quectel.com/doc/quecpython/API_reference/en/)
-- [Téléchargements QuecPython (firmwares, outils)](https://developer.quectel.com/en/resource-download?cid=4)
-- [QuecPython sur GitHub](https://github.com/QuecPython)
-- [Projet d'origine FoxExe/ZX908](https://github.com/FoxExe/ZX908)
+- [QuecPython API documentation](https://developer.quectel.com/doc/quecpython/API_reference/en/)
+- [QuecPython downloads (firmware, tools)](https://developer.quectel.com/en/resource-download?cid=4)
+- [QuecPython on GitHub](https://github.com/QuecPython)
+- [Original FoxExe/ZX908 project](https://github.com/FoxExe/ZX908)
 
-## Licence
+## License
 
-GPL-3.0, comme le projet d'origine. Voir [LICENSE](LICENSE).
+GPL-3.0, like the original project. See [LICENSE](LICENSE).

@@ -106,13 +106,40 @@ def parse_rmc(line):
 
 def parse_gga(line):
 	"""$xxGGA,time,lat,N,lon,E,quality,sats,hdop,altitude,M,..."""
-	global last_altitude
+	global last_altitude, sats_used
 	f = line.split(b',')
 	try:
+		sats_used = int(f[7].decode()) if f[7] else 0
 		if f[6] != b'0' and f[9]:
 			last_altitude = float(f[9].decode())
 	except (ValueError, IndexError):
 		pass
+
+
+# GSV talker -> constellation label (CASIC chips use BD or GB for BeiDou)
+CONSTELLATIONS = {'GP': 'GP', 'BD': 'BD', 'GB': 'BD', 'GL': 'GL', 'GA': 'GA', 'GQ': 'GQ'}
+sats_used = 0
+sats_in_view = {}          # {'GP': 8, 'BD': 4} committed once per second
+pending_sats_in_view = {}
+
+
+def parse_gsv(line):
+	"""$xxGSV,total_msgs,msg_num,sats_in_view,... one series per constellation"""
+	f = line.split(b',')
+	try:
+		talker = CONSTELLATIONS.get(f[0][1:3].decode(), f[0][1:3].decode())
+		pending_sats_in_view[talker] = int(f[3].decode())
+	except (ValueError, IndexError):
+		pass
+
+
+def satellites_field():
+	"""'7/12(GP8+BD4)': used in the fix / in view (per constellation)"""
+	if not sats_in_view:
+		return '%d/?' % sats_used
+	total = sum(sats_in_view.values())
+	detail = '+'.join('%s%d' % (k, sats_in_view[k]) for k in sorted(sats_in_view))
+	return '%d/%d(%s)' % (sats_used, total, detail)
 
 
 pending_fix_type = 1
@@ -129,8 +156,8 @@ def parse_gsa(line):
 
 
 def read_nmea(uart, buf):
-	"""Read UART, parse RMC and GSA sentences, return leftover partial line"""
-	global fix_type, pending_fix_type
+	"""Read UART, parse RMC, GSA, GGA and GSV sentences, return leftover partial line"""
+	global fix_type, pending_fix_type, sats_in_view, pending_sats_in_view
 	size = uart.any()
 	if size:
 		buf += uart.read(size)
@@ -145,10 +172,15 @@ def read_nmea(uart, buf):
 				parse_rmc(line)
 				# one RMC per second: commit the best GSA fix type seen since the previous one
 				fix_type, pending_fix_type = pending_fix_type, 1
+				# GSV may be sent less often than RMC: keep the last complete set
+				if pending_sats_in_view:
+					sats_in_view, pending_sats_in_view = pending_sats_in_view, {}
 			elif kind == b'GSA':
 				parse_gsa(line)
 			elif kind == b'GGA':
 				parse_gga(line)
+			elif kind == b'GSV':
+				parse_gsv(line)
 	return buf
 
 
@@ -259,12 +291,12 @@ def build_gps_line():
 
 
 def build_line():
-	"""datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vitesse,IP,operator,signal,telephone,"""
+	"""datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vitesse,IP,operator,signal,telephone,satellites,"""
 	import dataCall
 	import net
 	import sim
 	date, x, y, alt, speed = gps_fields()
-	return '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,' % (
+	return '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,' % (
 		date,
 		safe(battery_field),
 		{2: '2D', 3: '3D'}.get(fix_type, '?'),
@@ -272,7 +304,8 @@ def build_line():
 		safe(lambda: dataCall.getInfo(1, 0)[2][2]),
 		safe(lambda: net.operatorName()[0]),
 		safe(cell_signal),
-		safe(sim.getPhoneNumber))
+		safe(sim.getPhoneNumber),
+		safe(satellites_field))
 
 
 def wait_network():

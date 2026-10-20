@@ -1,3 +1,4 @@
+import math
 import utime
 import _thread
 import checkNet
@@ -172,34 +173,128 @@ def good_fix():
 	return True, ''
 
 
+# --- Coherence check -------------------------------------------------------------
+# Each RMC position (1 per second) is a candidate, compared with the last ACCEPTED
+# one. Only accepted positions are sent (last_lat, last_lon, last_speed_kmh,
+# last_altitude, last_utc are the accepted values).
+MAX_SPEED_KMH = 250        # implied speed above this = jump, rejected
+MAX_ACCEL_MS2 = 8          # change of reported speed above this (m/s per s) = rejected
+JUMP_BASE_M = 15           # distance tolerance on top of the reported speed ...
+JUMP_HDOP_M = 5            # ... plus this many metres per HDOP unit
+GAP_S = 30                 # after a gap this long (tunnel, lost fix): only MAX_SPEED_KMH is checked
+RESET_AFTER_REJECTS = 5    # this many rejections in a row: the reference was wrong, restart from the candidate
+ALT_BASE_M = 25            # altitude tolerance on top of ...
+MAX_CLIMB_MS = 10          # ... this vertical speed (m/s); beyond: previous altitude is kept
+STATIONARY_KMH = 2         # below this reported speed the device is considered stopped:
+STATIONARY_AVG_N = 10      # its position is the average of the last N points, speed 0
+
+ref_time_s = None          # GPS time (seconds) of the last accepted position
+ref_lat = ref_lon = 0.0    # last accepted raw position (before averaging)
+ref_speed_ms = 0.0
+rejects = 0
+stationary = []            # recent (lat, lon) while stopped
+gga_altitude = None        # raw altitude of the last GGA
+
+
+def distance_m(lat1, lon1, lat2, lon2):
+	"""Equirectangular approximation: exact enough for a few km"""
+	x = math.radians(lon2 - lon1) * math.cos(math.radians((lat1 + lat2) / 2))
+	y = math.radians(lat2 - lat1)
+	return 6371000 * math.sqrt(x * x + y * y)
+
+
+def check_candidate(t_s, lat, lon, speed_ms):
+	"""'' if the candidate is coherent with the last accepted position, else the reason"""
+	if ref_time_s is None:
+		return ''
+	dt = t_s - ref_time_s
+	if dt == 0:
+		return 'same second'
+	if dt < 0:
+		return 'GPS time going back %d s' % int(-dt)
+	d = distance_m(ref_lat, ref_lon, lat, lon)
+	if d / dt > MAX_SPEED_KMH / 3.6:
+		return 'jump of %d m in %d s (%d km/h)' % (int(d), int(dt), int(d / dt * 3.6))
+	if dt > GAP_S:
+		return ''
+	tolerance = JUMP_BASE_M + JUMP_HDOP_M * (last_hdop or 5)
+	expected = max(speed_ms, ref_speed_ms) * dt
+	if d > expected + tolerance:
+		return '%d m moved, %d m expected at %.1f km/h' % (int(d), int(expected), max(speed_ms, ref_speed_ms) * 3.6)
+	accel = abs(speed_ms - ref_speed_ms) / dt
+	if accel > MAX_ACCEL_MS2:
+		return 'speed %.0f -> %.0f km/h in %d s' % (ref_speed_ms * 3.6, speed_ms * 3.6, int(dt))
+	return ''
+
+
+def accept(t_s, utc, lat, lon, speed_ms):
+	"""Store the accepted candidate and update the published (possibly averaged) values"""
+	global ref_time_s, ref_lat, ref_lon, ref_speed_ms, rejects, stationary
+	global last_utc, last_lat, last_lon, last_speed_kmh, last_altitude, last_fix_ms
+	dt = t_s - ref_time_s if ref_time_s is not None else 0
+	ref_time_s, ref_lat, ref_lon, ref_speed_ms, rejects = t_s, lat, lon, speed_ms, 0
+	last_utc = utc
+	last_fix_ms = utime.ticks_ms()
+	# stopped: average the last positions (GPS jitter of a few metres), speed 0
+	if speed_ms * 3.6 < STATIONARY_KMH:
+		stationary = (stationary + [(lat, lon)])[-STATIONARY_AVG_N:]
+		last_lat = sum(p[0] for p in stationary) / len(stationary)
+		last_lon = sum(p[1] for p in stationary) / len(stationary)
+		last_speed_kmh = 0.0
+	else:
+		stationary = []
+		last_lat, last_lon, last_speed_kmh = lat, lon, speed_ms * 3.6
+	# altitude: keep the previous one if the new value climbs faster than possible
+	if gga_altitude is not None:
+		if last_altitude is None or dt <= 0 or \
+				abs(gga_altitude - last_altitude) <= ALT_BASE_M + MAX_CLIMB_MS * dt:
+			last_altitude = gga_altitude
+
+
 def parse_rmc(line):
-	"""$xxRMC,hhmmss.sss,A|V,lat,N|S,lon,E|W,speed(knots),course,ddmmyy,..."""
-	global gps_fix, last_fix_ms, last_utc, last_lat, last_lon, last_speed_kmh
+	"""$xxRMC,hhmmss.sss,A|V,lat,N|S,lon,E|W,speed(knots),course,ddmmyy,...
+	A valid position is accepted only if check_candidate() finds it coherent."""
+	global gps_fix, rejects, ref_time_s
 	f = line.split(b',')
 	gps_fix = len(f) > 9 and f[2] == b'A'
 	if not gps_fix:
 		return
 	try:
 		t, d = f[1].decode(), f[9].decode()
-		last_utc = (2000 + int(d[4:6]), int(d[2:4]), int(d[0:2]),
+		utc = (2000 + int(d[4:6]), int(d[2:4]), int(d[0:2]),
 			int(t[0:2]), int(t[2:4]), int(t[4:6]))
-		last_lat = nmea_to_degrees(f[3], f[4])
-		last_lon = nmea_to_degrees(f[5], f[6])
-		last_speed_kmh = float(f[7].decode()) * 1.852 if f[7] else 0.0
-		last_fix_ms = utime.ticks_ms()
+		lat = nmea_to_degrees(f[3], f[4])
+		lon = nmea_to_degrees(f[5], f[6])
+		speed_ms = float(f[7].decode()) * 0.5144 if f[7] else 0.0  # knots -> m/s
 	except (ValueError, IndexError):
 		gps_fix = False
+		return
+	t_s = utime.mktime(utc + (0, 0))
+	reason = check_candidate(t_s, lat, lon, speed_ms)
+	if not reason:
+		accept(t_s, utc, lat, lon, speed_ms)
+		return
+	if reason == 'same second':
+		return  # same second sent twice: nothing to do (a time going back counts as a rejection)
+	rejects += 1
+	print('GPS position rejected (%d/%d): %s' % (rejects, RESET_AFTER_REJECTS, reason))
+	if rejects >= RESET_AFTER_REJECTS:
+		# several coherent-looking positions all disagree with the reference:
+		# the reference was the outlier, start again from the current position
+		print('GPS reference reset')
+		ref_time_s = None
+		accept(t_s, utc, lat, lon, speed_ms)
 
 
 def parse_gga(line):
 	"""$xxGGA,time,lat,N,lon,E,quality,sats,hdop,altitude,M,..."""
-	global last_altitude, sats_used, last_hdop
+	global gga_altitude, sats_used, last_hdop
 	f = line.split(b',')
 	try:
 		sats_used = int(f[7].decode()) if f[7] else 0
 		last_hdop = float(f[8].decode()) if f[8] else None
 		if f[6] != b'0' and f[9]:
-			last_altitude = float(f[9].decode())
+			gga_altitude = float(f[9].decode())
 	except (ValueError, IndexError):
 		pass
 
@@ -257,7 +352,10 @@ def read_nmea(uart, buf):
 				continue
 			kind = line[3:6]
 			if kind == b'RMC':
-				parse_rmc(line)
+				try:
+					parse_rmc(line)
+				except Exception as e:  # never let one bad sentence stop the tracker
+					print('RMC error:', e, line)
 				# one RMC per second: commit the best GSA fix type seen since the previous one
 				fix_type, pending_fix_type = pending_fix_type, 1
 				# GSV may be sent less often than RMC: keep the last complete set

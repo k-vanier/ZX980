@@ -50,6 +50,24 @@ datefrance,niveaubat,fix2Dou3D,posX,posY,altitude,vitesse,IP,operator,signal,tel
 
 Nothing is sent until the GPS has a **precise** position: 3D fix, HDOP ≤ 2.5 and at least 6 satellites used (`MIN_FIX_TYPE`, `MAX_HDOP`, `MIN_SATS_USED`). Otherwise the REPL prints `Imprecise position (HDOP 3.1 > 2.5), nothing sent`. Indoors or with the antenna badly placed, the tracker can therefore stay silent: relax these thresholds if needed. Data usage with the default intervals (3 s / 60 s): about 32 MB per day, i.e. about 1 GB per month when running continuously (about 600 MB at 5 s, 300 MB at 10 s). At 3 s, a send on a weak 4G signal can take longer than the interval, so the actual interval can be 3 to 4 s, and the 4G radio never goes idle, which shortens battery life. Each message costs about 1.1 KB, because it includes a DNS lookup and a full TCP connection, whereas the CSV line itself is only about 75 bytes.
 
+### Position coherence check
+
+The GPS gives a position every second. Each one is compared with the last **accepted** position, and only accepted positions are sent:
+
+| Check | Rejected when |
+|---|---|
+| Jump | Implied speed between the two positions above 250 km/h (`MAX_SPEED_KMH`), always checked, even after a long gap |
+| Distance vs reported speed | Distance moved > reported speed × time + 15 m + 5 m per HDOP unit (`JUMP_BASE_M`, `JUMP_HDOP_M`) |
+| Acceleration | Reported speed changes by more than 8 m/s per second (`MAX_ACCEL_MS2`, about 29 km/h per second) |
+| Time | GPS time going back. The same second twice (duplicate sentence) is ignored silently |
+
+- After a gap of more than 30 s (`GAP_S`: tunnel, lost fix), only the jump check applies, so the tracker resumes where it really is.
+- After 5 rejections in a row (`RESET_AFTER_REJECTS`), the reference itself was probably the bad point: the tracker restarts from the current position.
+- **Stopped** (reported speed below 2 km/h, `STATIONARY_KMH`): the position sent is the average of the last 10 accepted points (`STATIONARY_AVG_N`) and the speed is 0. This removes the jitter of a few metres that otherwise draws a "star" on the map.
+- **Altitude**: if it changes faster than 25 m + 10 m/s (`ALT_BASE_M`, `MAX_CLIMB_MS`), the previous altitude is kept (the position is still accepted).
+- If positions keep being rejected for more than 5 s (`FIX_TIMEOUT_MS`), nothing is sent rather than an old position.
+- Each rejection is printed in the REPL, e.g. `GPS position rejected (1/5): 180 m moved, 1 m expected at 4.0 km/h`.
+
 ### LEDs
 
 | LED | GPIO | Behaviour |
@@ -123,6 +141,7 @@ Copy the whole folder to `/usr` on the module.
 | `MAX_HDOP` | `2.5` | Maximum HDOP (horizontal dilution of precision) to send a position |
 | `MIN_SATS_USED` | `6` | Minimum number of satellites used in the fix |
 | `GNSS_MODE` | `7` | Constellations sent to the GPS chip with `$PCAS04`: 1 GPS, 2 BeiDou, 4 GLONASS, added together (7 = all three) |
+| `MAX_SPEED_KMH`, `MAX_ACCEL_MS2`, `JUMP_BASE_M`, `JUMP_HDOP_M`, `GAP_S`, `RESET_AFTER_REJECTS`, `ALT_BASE_M`, `MAX_CLIMB_MS`, `STATIONARY_KMH`, `STATIONARY_AVG_N` | see above | Position coherence check |
 | `LOW_BATTERY_MV` | `3500` | Low battery shutdown threshold (mV) |
 | `LOW_BATTERY_CHECKS` | `3` | Number of consecutive low readings before shutdown |
 | `BATTERY_CHECK_MS` | `30000` | Interval between two battery checks |

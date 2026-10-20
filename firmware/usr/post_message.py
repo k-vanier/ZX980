@@ -9,6 +9,7 @@ DEFAULT_CONFIG = {
 	'server_path': '/message',
 	'gps_interval_s': 3,    # short line (GPS position) every N seconds
 	'full_interval_s': 60,  # full line (GPS + battery, network...) every N seconds
+	'profile': 'walk',      # GPS coherence thresholds: 'walk' or 'car' (see gps_post.PROFILES)
 }
 MESSAGE = {'texte': 'Bonjour FreeBSD'}
 

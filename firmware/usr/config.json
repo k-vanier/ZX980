@@ -3,5 +3,6 @@
 	"server_port": 8080,
 	"server_path": "/message",
 	"gps_interval_s": 3,
-	"full_interval_s": 60
+	"full_interval_s": 60,
+	"profile": "walk"
 }

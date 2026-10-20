@@ -52,18 +52,19 @@ Nothing is sent until the GPS has a **precise** position: 3D fix, HDOP ≤ 2.5 a
 
 ### Position coherence check
 
-The GPS gives a position every second. Each one is compared with the last **accepted** position, and only accepted positions are sent:
+The GPS gives a position every second. Each one is compared with the last **accepted** position, and only accepted positions are sent. The thresholds depend on the `profile` set in `config.json`:
 
-| Check | Rejected when |
-|---|---|
-| Jump | Implied speed between the two positions above 250 km/h (`MAX_SPEED_KMH`), always checked, even after a long gap |
-| Distance vs reported speed | Distance moved > reported speed × time + 15 m + 5 m per HDOP unit (`JUMP_BASE_M`, `JUMP_HDOP_M`) |
-| Acceleration | Reported speed changes by more than 8 m/s per second (`MAX_ACCEL_MS2`, about 29 km/h per second) |
-| Time | GPS time going back. The same second twice (duplicate sentence) is ignored silently |
+| Check | Rejected when | `walk` (default) | `car` |
+|---|---|---|---|
+| Jump | Implied speed between the two positions above `MAX_SPEED_KMH`, always checked, even after a long gap | 30 km/h | 250 km/h |
+| Distance vs reported speed | Distance moved > reported speed × time + `JUMP_BASE_M` + `JUMP_HDOP_M` per HDOP unit | 10 m + 4 m/HDOP | 15 m + 5 m/HDOP |
+| Acceleration | Reported speed changes by more than `MAX_ACCEL_MS2` per second | 3 m/s² | 8 m/s² |
+| Time | GPS time going back. The same second twice (duplicate sentence) is ignored silently | | |
 
 - After a gap of more than 30 s (`GAP_S`: tunnel, lost fix), only the jump check applies, so the tracker resumes where it really is.
 - After 5 rejections in a row (`RESET_AFTER_REJECTS`), the reference itself was probably the bad point: the tracker restarts from the current position.
-- **Stopped** (reported speed below 2 km/h, `STATIONARY_KMH`): the position sent is the average of the last 10 accepted points (`STATIONARY_AVG_N`) and the speed is 0. This removes the jitter of a few metres that otherwise draws a "star" on the map.
+- **Stopped** is detected from the positions, not from the GPS speed (too noisy when walking slowly): the points of the last 10 s (`STOP_WINDOW_S`) all lie within 4 m (`STOP_RADIUS_M`) of their centre and the first and last are less than 4 m apart. The position sent is then their centre and the speed is 0. This removes the jitter of a few metres that otherwise draws a "star" on the map. A slow walk (0.5 m/s = 5 m in 10 s) is still seen as moving, so its distance is counted on the dashboard.
+- **Moving**: the position sent is the average of the last 3 points (`SMOOTH_N`), about 1 m behind when walking, which removes most of the GPS zigzag. The speed sent is the one measured by the GPS.
 - **Altitude**: if it changes faster than 25 m + 10 m/s (`ALT_BASE_M`, `MAX_CLIMB_MS`), the previous altitude is kept (the position is still accepted).
 - If positions keep being rejected for more than 5 s (`FIX_TIMEOUT_MS`), nothing is sent rather than an old position.
 - Each rejection is printed in the REPL, e.g. `GPS position rejected (1/5): 180 m moved, 1 m expected at 4.0 km/h`.
@@ -118,7 +119,8 @@ Copy the whole folder to `/usr` on the module.
 	"server_port": 8080,
 	"server_path": "/message",
 	"gps_interval_s": 3,
-	"full_interval_s": 60
+	"full_interval_s": 60,
+	"profile": "walk"
 }
 ```
 
@@ -127,6 +129,7 @@ Copy the whole folder to `/usr` on the module.
 | `server_host`, `server_port`, `server_path` | — | API server address |
 | `gps_interval_s` | `3` | Short line (GPS position) every N seconds |
 | `full_interval_s` | `60` | Full line every N seconds (replaces the short line at that moment) |
+| `profile` | `walk` | GPS coherence thresholds: `walk` (pedestrian) or `car`, see "Position coherence check" |
 
 `main.py`, `gps_post.py` and `post_message.py` read this file. To change server or intervals, edit `/usr/config.json` on the module and restart: the code does not change. If the file is missing or invalid, the script prints a message and uses the defaults of `post_message.py`; an invalid interval falls back to its default, and intervals are at least 1 s. At startup, `main.py` prints the address in use (`Server: ...`).
 
@@ -141,7 +144,7 @@ Copy the whole folder to `/usr` on the module.
 | `MAX_HDOP` | `2.5` | Maximum HDOP (horizontal dilution of precision) to send a position |
 | `MIN_SATS_USED` | `6` | Minimum number of satellites used in the fix |
 | `GNSS_MODE` | `7` | Constellations sent to the GPS chip with `$PCAS04`: 1 GPS, 2 BeiDou, 4 GLONASS, added together (7 = all three) |
-| `MAX_SPEED_KMH`, `MAX_ACCEL_MS2`, `JUMP_BASE_M`, `JUMP_HDOP_M`, `GAP_S`, `RESET_AFTER_REJECTS`, `ALT_BASE_M`, `MAX_CLIMB_MS`, `STATIONARY_KMH`, `STATIONARY_AVG_N` | see above | Position coherence check |
+| `PROFILES`, `GAP_S`, `RESET_AFTER_REJECTS`, `ALT_BASE_M`, `MAX_CLIMB_MS`, `STOP_WINDOW_S`, `STOP_RADIUS_M`, `SMOOTH_N` | see above | Position coherence check (`MAX_SPEED_KMH`, `MAX_ACCEL_MS2`, `JUMP_BASE_M`, `JUMP_HDOP_M` come from the profile) |
 | `LOW_BATTERY_MV` | `3500` | Low battery shutdown threshold (mV) |
 | `LOW_BATTERY_CHECKS` | `3` | Number of consecutive low readings before shutdown |
 | `BATTERY_CHECK_MS` | `30000` | Interval between two battery checks |

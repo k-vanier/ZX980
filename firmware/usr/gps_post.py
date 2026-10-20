@@ -177,23 +177,45 @@ def good_fix():
 # Each RMC position (1 per second) is a candidate, compared with the last ACCEPTED
 # one. Only accepted positions are sent (last_lat, last_lon, last_speed_kmh,
 # last_altitude, last_utc are the accepted values).
-MAX_SPEED_KMH = 250        # implied speed above this = jump, rejected
-MAX_ACCEL_MS2 = 8          # change of reported speed above this (m/s per s) = rejected
-JUMP_BASE_M = 15           # distance tolerance on top of the reported speed ...
-JUMP_HDOP_M = 5            # ... plus this many metres per HDOP unit
+# Thresholds depending on how the tracker moves: "profile" in config.json
+PROFILES = {
+	# MAX_SPEED_KMH: implied speed above this = jump, rejected
+	# MAX_ACCEL_MS2: change of reported speed above this (m/s per s) = rejected
+	# JUMP_BASE_M + JUMP_HDOP_M x HDOP: distance tolerance on top of the reported speed
+	'walk': {'MAX_SPEED_KMH': 30, 'MAX_ACCEL_MS2': 3, 'JUMP_BASE_M': 10, 'JUMP_HDOP_M': 4},
+	'car': {'MAX_SPEED_KMH': 250, 'MAX_ACCEL_MS2': 8, 'JUMP_BASE_M': 15, 'JUMP_HDOP_M': 5},
+}
+MAX_SPEED_KMH = 30         # set by apply_profile()
+MAX_ACCEL_MS2 = 3
+JUMP_BASE_M = 10
+JUMP_HDOP_M = 4
 GAP_S = 30                 # after a gap this long (tunnel, lost fix): only MAX_SPEED_KMH is checked
 RESET_AFTER_REJECTS = 5    # this many rejections in a row: the reference was wrong, restart from the candidate
 ALT_BASE_M = 25            # altitude tolerance on top of ...
 MAX_CLIMB_MS = 10          # ... this vertical speed (m/s); beyond: previous altitude is kept
-STATIONARY_KMH = 2         # below this reported speed the device is considered stopped:
-STATIONARY_AVG_N = 10      # its position is the average of the last N points, speed 0
+STOP_WINDOW_S = 10         # stopped = over the last STOP_WINDOW_S seconds of points ...
+STOP_RADIUS_M = 4          # ... all within this radius of their centre AND moved less than it
+SMOOTH_N = 3               # moving: position sent = average of the last SMOOTH_N points
 
 ref_time_s = None          # GPS time (seconds) of the last accepted position
 ref_lat = ref_lon = 0.0    # last accepted raw position (before averaging)
 ref_speed_ms = 0.0
 rejects = 0
-stationary = []            # recent (lat, lon) while stopped
+recent = []                # accepted raw points (t_s, lat, lon), last STOP_WINDOW_S seconds
 gga_altitude = None        # raw altitude of the last GGA
+
+
+def apply_profile(name):
+	"""Copy the thresholds of PROFILES[name] into the module constants"""
+	global MAX_SPEED_KMH, MAX_ACCEL_MS2, JUMP_BASE_M, JUMP_HDOP_M
+	if name not in PROFILES:
+		print('Unknown profile %r, using walk' % name)
+		name = 'walk'
+	p = PROFILES[name]
+	MAX_SPEED_KMH, MAX_ACCEL_MS2 = p['MAX_SPEED_KMH'], p['MAX_ACCEL_MS2']
+	JUMP_BASE_M, JUMP_HDOP_M = p['JUMP_BASE_M'], p['JUMP_HDOP_M']
+	print('GPS profile %s: max %d km/h, max %d m/s2, tolerance %d m + %d m/HDOP' % (
+		name, MAX_SPEED_KMH, MAX_ACCEL_MS2, JUMP_BASE_M, JUMP_HDOP_M))
 
 
 def distance_m(lat1, lon1, lat2, lon2):
@@ -227,23 +249,42 @@ def check_candidate(t_s, lat, lon, speed_ms):
 	return ''
 
 
+def centre(points):
+	n = len(points)
+	return sum(p[1] for p in points) / n, sum(p[2] for p in points) / n
+
+
+def is_stopped(points):
+	"""Stopped when the points cover STOP_WINDOW_S seconds, all lie within STOP_RADIUS_M
+	of their centre and the first and last are less than STOP_RADIUS_M apart.
+	Detected from the positions, not from the GPS speed, which is too noisy when walking."""
+	if not points or points[-1][0] - points[0][0] < STOP_WINDOW_S:
+		return False
+	if distance_m(points[0][1], points[0][2], points[-1][1], points[-1][2]) > STOP_RADIUS_M:
+		return False
+	clat, clon = centre(points)
+	return all(distance_m(clat, clon, p[1], p[2]) <= STOP_RADIUS_M for p in points)
+
+
 def accept(t_s, utc, lat, lon, speed_ms):
-	"""Store the accepted candidate and update the published (possibly averaged) values"""
-	global ref_time_s, ref_lat, ref_lon, ref_speed_ms, rejects, stationary
+	"""Store the accepted candidate and update the published (smoothed) values"""
+	global ref_time_s, ref_lat, ref_lon, ref_speed_ms, rejects, recent
 	global last_utc, last_lat, last_lon, last_speed_kmh, last_altitude, last_fix_ms
 	dt = t_s - ref_time_s if ref_time_s is not None else 0
+	if ref_time_s is None or dt > GAP_S:
+		recent = []  # first point, reset or long gap: do not average with old points
 	ref_time_s, ref_lat, ref_lon, ref_speed_ms, rejects = t_s, lat, lon, speed_ms, 0
 	last_utc = utc
 	last_fix_ms = utime.ticks_ms()
-	# stopped: average the last positions (GPS jitter of a few metres), speed 0
-	if speed_ms * 3.6 < STATIONARY_KMH:
-		stationary = (stationary + [(lat, lon)])[-STATIONARY_AVG_N:]
-		last_lat = sum(p[0] for p in stationary) / len(stationary)
-		last_lon = sum(p[1] for p in stationary) / len(stationary)
+	recent = [p for p in recent if t_s - p[0] <= STOP_WINDOW_S] + [(t_s, lat, lon)]
+	if is_stopped(recent):
+		# stopped: centre of the last STOP_WINDOW_S seconds (removes the GPS jitter), speed 0
+		last_lat, last_lon = centre(recent)
 		last_speed_kmh = 0.0
 	else:
-		stationary = []
-		last_lat, last_lon, last_speed_kmh = lat, lon, speed_ms * 3.6
+		# moving: light average of the last SMOOTH_N points (about 1 m behind when walking)
+		last_lat, last_lon = centre(recent[-SMOOTH_N:])
+		last_speed_kmh = speed_ms * 3.6
 	# altitude: keep the previous one if the new value climbs faster than possible
 	if gga_altitude is not None:
 		if last_altitude is None or dt <= 0 or \
@@ -605,6 +646,7 @@ def run(config=None):
 	host, port, path = config['server_host'], config['server_port'], config['server_path']
 	gps_interval_ms = config['gps_interval_s'] * 1000    # short line: GPS position only
 	full_interval_ms = config['full_interval_s'] * 1000  # full line: GPS + battery, network, phone
+	apply_profile(config['profile'])
 	if not led_started:  # run() may be restarted by main.py after a crash
 		_thread.start_new_thread(led_thread, ())
 		# started before wait_network(): must work even without 4G coverage

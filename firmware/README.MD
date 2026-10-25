@@ -179,8 +179,6 @@ During GPS tests, rename `main.py`, otherwise `gps_post` uses the GPS at the sam
 
 To disable the automatic start, delete or rename `/usr/main.py`.
 
-`Firmware/Tracker_fw_alpha.bin` is FoxExe's original full firmware for the **EC800N**. Do not flash it on an EC800M.
-
 ## Hardware
 
 | Item | Value |

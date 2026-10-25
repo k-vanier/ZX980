@@ -1,6 +1,6 @@
 # ZX980 Android
 
-Android app that shows the [`ZX980_Server`](../ZX980_Server) dashboard: OpenStreetMap map with the track, online / offline status, position, trip (distance, max speed), battery, network and the messages of the selected period.
+Android app that shows the [`ZX980_Server`](../server) dashboard: OpenStreetMap map with the track, online / offline status, position, trip (distance, max speed), battery, network and the messages of the selected period.
 
 It reads the same JSON API as the web page (`/api/state`, port 8090, HTTP Basic authentication) and refreshes every 5 s. The server and the tracker do not change.
 
@@ -8,7 +8,7 @@ Kotlin, [osmdroid](https://github.com/osmdroid/osmdroid) map, Android 8.0 (API 2
 
 ## Usage
 
-1. Copy `ZX980.apk` to the phone and open it (allow installing apps from unknown sources).
+1. Download `ZX980.apk` from the [Releases](https://github.com/k-vanier/ZX980/releases/latest) page, copy it to the phone and open it (allow installing apps from unknown sources).
 2. On first launch, the Settings screen asks for:
    - the dashboard address, for example `http://192.168.1.10:8090` (`http://` is added if missing);
    - the username and password created with `--add-user`.
@@ -43,10 +43,11 @@ $env:JAVA_HOME = "C:\Users\user\AndroidDev\jdk17"
 .\gradlew.bat assembleDebug
 ```
 
-The APK is built in `app\build\outputs\apk\debug\app-debug.apk`. To update `ZX980.apk` in the repository:
+The APK is built in `app\build\outputs\apk\debug\app-debug.apk`. To publish it, rename it `ZX980.apk` and attach it to a new GitHub release:
 
 ```powershell
 Copy-Item app\build\outputs\apk\debug\app-debug.apk ZX980.apk
+gh release create vX.Y ZX980.apk
 ```
 
 It is signed with the debug key: it installs directly, but cannot be published on the Play Store.

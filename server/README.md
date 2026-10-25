@@ -76,7 +76,7 @@ tail -f /var/log/zx980.log
 Download the script straight from GitHub rather than copy-pasting it (a truncated file makes the service restart in a loop, and Caddy then answers 502 Bad Gateway):
 
 ```sh
-fetch -o /tmp/zx980_server.py https://raw.githubusercontent.com/k-vanier/DEV/main/ZX980_Server/zx980_server.py
+fetch -o /tmp/zx980_server.py https://raw.githubusercontent.com/k-vanier/ZX980/main/server/zx980_server.py
 install -m 555 /tmp/zx980_server.py /usr/local/libexec/zx980_server.py
 python3.12 -m py_compile /usr/local/libexec/zx980_server.py && service zx980 restart
 tail -3 /var/log/zx980.log
@@ -84,7 +84,7 @@ tail -3 /var/log/zx980.log
 
 `py_compile` prints nothing when the file is valid; on an error the service is not restarted and the running version keeps working. The log must show `Tableau de bord sur http://...`. Then reload the dashboard with Ctrl+F5.
 
-The same goes for `zx980.rc` (`.../ZX980_Server/zx980.rc` to `/usr/local/etc/rc.d/zx980`) and the `Caddyfile`, which only needs `service caddy reload` (keep your own domain name in the installed copy).
+The same goes for `zx980.rc` (`.../server/zx980.rc` to `/usr/local/etc/rc.d/zx980`) and the `Caddyfile`, which only needs `service caddy reload` (keep your own domain name in the installed copy).
 
 The database (`/var/db/zx980/zx980.sqlite`) is kept across updates; new columns are added automatically at startup.
 

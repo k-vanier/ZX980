@@ -1,6 +1,6 @@
 # ZX980 — ZX908 / Quectel EC800M GPS tracker
 
-QuecPython firmware for the **ZX908** tracker box fitted with a **Quectel EC800M-CNLE** 4G module. At startup, the tracker reads its GPS position and sends it over HTTP to a server. The server stores the positions and shows them on a map: see [`ZX980_Server`](../ZX980_Server).
+QuecPython firmware for the **ZX908** tracker box fitted with a **Quectel EC800M-CNLE** 4G module. At startup, the tracker reads its GPS position and sends it over HTTP to a server. The server stores the positions and shows them on a map: see [`ZX980_Server`](../server).
 
 This project is adapted from [FoxExe/ZX908](https://github.com/FoxExe/ZX908), originally written for the EC800N.
 
@@ -172,7 +172,7 @@ During GPS tests, rename `main.py`, otherwise `gps_post` uses the GPS at the sam
 
 ## Installation
 
-1. **Firmware:** flash [`Firmware/QPY_OCPU_V0005_EC800M_CNLE_FW.bin`](Firmware/QPY_OCPU_V0005_EC800M_CNLE_FW.bin) with [QPYcom](https://python.quectel.com/en/wp-content/uploads/sites/2/2024/11/QPYcom_V3.6.0.zip). Install the [Quectel USB drivers](https://python.quectel.com/wp-content/uploads/2024/09/Quectel_Windows_USB_DriverA_Customer_V1.1.13.zip) first.
+1. **Firmware:** flash `QPY_OCPU_V0005_EC800M_CNLE_FW.bin`, from the [Releases](https://github.com/k-vanier/ZX980/releases/latest) page, with [QPYcom](https://python.quectel.com/en/wp-content/uploads/sites/2/2024/11/QPYcom_V3.6.0.zip). Install the [Quectel USB drivers](https://python.quectel.com/wp-content/uploads/2024/09/Quectel_Windows_USB_DriverA_Customer_V1.1.13.zip) first.
 2. **Code:** set the server address in `usr/config.json`, then copy the whole content of `usr/` (including `config.json`) to `/usr` on the module, from the File tab of QPYcom.
 3. **Check:** run `check_ec800m.py` from the REPL.
 4. **Start:** restart the module. Sending starts as soon as 4G is connected and the GPS has a position.
